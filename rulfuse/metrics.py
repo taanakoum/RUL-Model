@@ -1,10 +1,8 @@
-"""Point and interval metrics (PROJECT_PLAN.md §10.2). More metrics join in Stage 4."""
+"""Point and interval metrics, in seconds (PROJECT_PLAN.md §10.2). More join in Stage 4."""
 
 from __future__ import annotations
 
 import numpy as np
-
-PASS_EQUIVALENT_SECONDS = 100.0  # k_sec / k = 1500 s / 15 passes (§4.3)
 
 
 def mae(y: np.ndarray, prediction: np.ndarray) -> float:
@@ -21,11 +19,6 @@ def rmse(y: np.ndarray, prediction: np.ndarray) -> float:
 
 def bias(y: np.ndarray, prediction: np.ndarray) -> float:
     return float(np.mean(np.asarray(prediction) - np.asarray(y)))
-
-
-def mae_eq(mae_pass: float, mae_sec: float) -> float:
-    """Pass-equivalent MAE: ½ (MAE in passes + MAE in seconds / 100 s)."""
-    return 0.5 * (mae_pass + mae_sec / PASS_EQUIVALENT_SECONDS)
 
 
 def coverage(y: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> float:

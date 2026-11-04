@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from rulfuse.data.nonastreda import BLOCKS_PER_RUN, PassMeta, metas_by_tool
+from rulfuse.adapters.nonastreda.load import BLOCKS_PER_RUN, PassMeta, metas_by_tool
 
 AXES = ("gap", "recorded")
 ATTACH_RULES = ("latest", "every", "dedup")

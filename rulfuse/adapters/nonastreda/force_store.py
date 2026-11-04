@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from rulfuse.data.nonastreda import (
+from rulfuse.adapters.nonastreda.load import (
     MAT_FILE,
     PassMeta,
     duplicate_groups,

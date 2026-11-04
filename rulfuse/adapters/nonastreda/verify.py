@@ -11,9 +11,9 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from rulfuse.data.force_store import sha256_file
-from rulfuse.data.nonastreda import PHOTO_KINDS, load_labels, metas_by_tool, photo_path
-from rulfuse.data.timeline import run_gaps
+from rulfuse.adapters.nonastreda.force_store import sha256_file
+from rulfuse.adapters.nonastreda.load import PHOTO_KINDS, load_labels, metas_by_tool, photo_path
+from rulfuse.adapters.nonastreda.timeline import run_gaps
 
 SKIPPED_PREFIXES = ("spec/",)
 

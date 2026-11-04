@@ -1,14 +1,11 @@
-"""Fold-level normalization and the causal tool baseline (PROJECT_PLAN.md §5.9, part P7).
+"""Fold-level normalization and the causal unit baseline (PROJECT_PLAN.md §5.9, part P7).
 
-* ``Scaler`` and ``PCA`` are fitted on the training tools' rows only (``train_rows``); the
-  validation and test tools are transformed, never fitted on.
-* ``BlockTransform`` standardizes and PCA-reduces each block of columns separately (one
-  block per force channel, §5.4) and concatenates the outputs, so a whole channel can be
-  masked by zeroing its output slice.
-* ``causal_baseline`` gives every token the mean of the tool's baseline tokens *seen so
-  far* (its first B recorded passes), so tokens become relative to the tool's healthy
-  start without looking ahead. ``relative_to_first`` does the same with only the first
-  valid token (photos: relative to the tool's first photo).
+* ``Scaler`` (and ``PCA``, kept for baseline B4 and analysis only, D17) are fitted on the
+  training units' rows (``train_rows``); validation and test units are only transformed.
+* ``causal_baseline`` gives every token the mean of the unit's baseline tokens *seen so
+  far* (its first B recordings), so tokens become relative to the unit's healthy start
+  without looking ahead. ``relative_to_first`` does the same with only the first valid
+  token (images: relative to the unit's first image of that type).
 """
 
 from __future__ import annotations
@@ -18,14 +15,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from rulfuse.data.folds import ToolFold
+from rulfuse.core.folds import Fold
 
 SCALE_FLOOR = 1e-8
 
 
-def train_rows(tools: Sequence[str] | np.ndarray, fold: ToolFold) -> np.ndarray:
-    """Boolean mask of the rows that belong to the fold's training tools."""
-    return np.isin(np.asarray(tools), np.asarray(fold.train_tools))
+def train_rows(units: Sequence[str] | np.ndarray, fold: Fold) -> np.ndarray:
+    """Boolean mask of the rows that belong to the fold's training units."""
+    return np.isin(np.asarray(units), np.asarray(fold.train))
 
 
 @dataclass(frozen=True)
@@ -74,7 +71,8 @@ class PCA:
 
 @dataclass(frozen=True)
 class BlockTransform:
-    """Standardize + PCA per block of input columns; outputs concatenated in block order."""
+    """Standardize + PCA per block of input columns; outputs concatenated in block order
+    (baseline B4 and analysis only)."""
 
     names: tuple[str, ...]
     columns: tuple[np.ndarray, ...]
@@ -103,7 +101,6 @@ class BlockTransform:
         return np.concatenate(parts, axis=1)
 
     def output_slices(self) -> dict[str, slice]:
-        """Output columns of each block (for masking one channel)."""
         out, start = {}, 0
         for name, pca in zip(self.names, self.pcas, strict=True):
             width = pca.components.shape[0]
@@ -112,24 +109,20 @@ class BlockTransform:
         return out
 
 
-def tool_shift(x: np.ndarray, tools: Sequence[str] | np.ndarray, fold: ToolFold) -> np.ndarray:
-    """Per feature, the fold's test tool's mean in the training tools' standardization.
-
-    0 means no shift. OmniFuser's EDA (§8) measured 0.16-0.32 sd (median absolute, over the
-    three raw force channels) and +1.15 sd for T1's Fx. The median absolute value of this
-    vector is the P7 acceptance quantity.
-    """
-    tools = np.asarray(tools)
-    scaler = Scaler.fit(np.asarray(x)[train_rows(tools, fold)])
-    return scaler.transform(np.asarray(x)[tools == fold.test]).mean(axis=0)
+def unit_shift(x: np.ndarray, units: Sequence[str] | np.ndarray, fold: Fold) -> np.ndarray:
+    """Per feature, the fold's test unit's mean in the training units' standardization
+    (0: no shift). The median absolute value is the P7 report quantity."""
+    units = np.asarray(units)
+    scaler = Scaler.fit(np.asarray(x)[train_rows(units, fold)])
+    return scaler.transform(np.asarray(x)[units == fold.test]).mean(axis=0)
 
 
 def causal_baseline(
     values: np.ndarray, in_baseline: np.ndarray, valid: np.ndarray | None = None
 ) -> np.ndarray:
     """Row i gets the mean of ``values[j]`` over rows j <= i that are in the baseline (and
-    valid). Rows must be one tool's tokens in time order. Rows before the first baseline row
-    get 0 (no baseline seen yet)."""
+    valid). Rows must be one unit's tokens in time order. Rows before the first baseline
+    row get 0 (no baseline seen yet)."""
     values = np.asarray(values, dtype=np.float64)
     use = np.asarray(in_baseline, dtype=bool)
     if valid is not None:
@@ -142,14 +135,6 @@ def causal_baseline(
     return baseline
 
 
-def baseline_rows(
-    positions: np.ndarray, recorded_positions: Sequence[int], passes: int = 4
-) -> np.ndarray:
-    """Rows whose pass is among the tool's first ``passes`` recorded passes."""
-    first = sorted(recorded_positions)[:passes]
-    return np.isin(np.asarray(positions), np.asarray(first))
-
-
 def relative_to_baseline(
     values: np.ndarray, in_baseline: np.ndarray, valid: np.ndarray | None = None
 ) -> np.ndarray:
@@ -157,8 +142,7 @@ def relative_to_baseline(
 
 
 def relative_to_first(values: np.ndarray, valid: np.ndarray | None = None) -> np.ndarray:
-    """Each row minus the first valid row (rows before it are 0): photos against the tool's
-    first photo."""
+    """Each row minus the first valid row (rows before it are 0)."""
     values = np.asarray(values, dtype=np.float64)
     ok = np.ones(len(values), dtype=bool) if valid is None else np.asarray(valid, dtype=bool)
     out = np.zeros_like(values)
