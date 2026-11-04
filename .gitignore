@@ -1,0 +1,15 @@
+# Raw data and generated outputs live outside the repository (RULFUSE_DATA_ROOT, D:\RULModel).
+Data/
+runs/
+*.npy
+*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rulfuse"
+version = "0.1.0"
+description = "Multimodal remaining-useful-life prediction on the Nonastreda milling dataset."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+eda = ["matplotlib>=3.8"]
+dev = ["ruff>=0.6", "pyright>=1.1.380"]
+hub = ["huggingface_hub>=0.24"]
+# Stage 3 adds an "encoders" extra: torch, transformers, peft, momentfm, mantis-tsfm,
+# chronos-forecasting (PROJECT_PLAN.md §16.2).
+
+[project.scripts]
+rulfuse = "rulfuse.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rulfuse*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "data: needs the real Nonastreda data under RULFUSE_DATA_ROOT (skipped when absent)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["docs/archive"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pyright]
+include = ["rulfuse", "scripts", "tests"]
+pythonVersion = "3.11"
+venvPath = "D:/RULModel"
+venv = ".venv"
