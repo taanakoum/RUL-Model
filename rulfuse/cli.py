@@ -74,7 +74,9 @@ def main(argv: list[str] | None = None) -> int:
     verify = sub.add_parser("verify-data", help="hashes, counts and gaps of the raw copy")
     verify.add_argument("--raw", type=Path, default=paths.raw_dir())
     verify.add_argument("--repo-data", type=Path, default=paths.REPO_ROOT / "Data")
-    verify.add_argument("--out", type=Path, default=paths.runs_dir() / "verify" / "verify-data.json")
+    verify.add_argument(
+        "--out", type=Path, default=paths.runs_dir() / "verify" / "verify-data.json"
+    )
     verify.set_defaults(func=cmd_verify_data)
 
     store = sub.add_parser("build-force-store", help="read the MAT file once into a memmap store")

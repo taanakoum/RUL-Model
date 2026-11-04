@@ -18,18 +18,31 @@ from rulfuse.data.timeline import run_gaps
 SKIPPED_PREFIXES = ("spec/",)
 
 
+TEXT_SUFFIXES = (".csv", ".json", ".txt")
+
+
+def _same_text(a: Path, b: Path) -> bool:
+    """True if two text files differ at most in their line endings."""
+    if a.suffix.lower() not in TEXT_SUFFIXES:
+        return False
+    return a.read_bytes().replace(b"\r\n", b"\n") == b.read_bytes().replace(b"\r\n", b"\n")
+
+
 def _hash_all(paths: list[Path], threads: int = 4) -> dict[Path, str]:
     with ThreadPoolExecutor(max_workers=threads) as pool:
         return dict(zip(paths, pool.map(sha256_file, paths), strict=True))
 
 
-def verify_data(raw: str | Path, repo_data: str | Path | None = None, threads: int = 4) -> dict:
+def verify_data(
+    raw: str | Path,
+    repo_data: str | Path | None = None,
+    threads: int = 4,
+    expected_passes: int = 512,
+) -> dict:
     root = Path(raw)
     manifest = json.loads((root / "MANIFEST.json").read_text(encoding="utf-8"))
     expected = {
-        rel: info
-        for rel, info in manifest["files"].items()
-        if not rel.startswith(SKIPPED_PREFIXES)
+        rel: info for rel, info in manifest["files"].items() if not rel.startswith(SKIPPED_PREFIXES)
     }
     present = [root / rel for rel in expected if (root / rel).is_file()]
     hashes = _hash_all(present, threads)
@@ -58,14 +71,17 @@ def verify_data(raw: str | Path, repo_data: str | Path | None = None, threads: i
         repo_root = Path(repo_data)
         candidates = [rel for rel in expected if (repo_root / rel).is_file()]
         repo_hashes = _hash_all([repo_root / rel for rel in candidates], threads)
-        differing = [
+        unequal = [
             rel for rel in candidates if repo_hashes[repo_root / rel] != expected[rel]["sha256"]
         ]
+        # A text file whose only change is CRLF line endings holds the same data.
+        line_endings_only = [rel for rel in unequal if _same_text(repo_root / rel, root / rel)]
         repo = {
             "checked": True,
             "path": str(repo_root),
             "files_compared": len(candidates),
-            "differing": differing,
+            "differing": [rel for rel in unequal if rel not in line_endings_only],
+            "line_endings_only": line_endings_only,
         }
 
     report = {
@@ -83,7 +99,7 @@ def verify_data(raw: str | Path, repo_data: str | Path | None = None, threads: i
     report["ok"] = bool(
         not missing
         and not mismatched
-        and len(metas) == 512
+        and len(metas) == expected_passes
         and not any(photos_missing.values())
         and (not repo["checked"] or not repo["differing"])
     )
