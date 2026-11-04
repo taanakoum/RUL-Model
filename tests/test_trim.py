@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 
 from rulfuse import paths
-from rulfuse.data.dataset import trimmed_bounds
-from rulfuse.data.force_store import ForceStore
-from rulfuse.data.trim import span_bounds_causal, span_bounds_omnifuser, trim_bounds
+from rulfuse.adapters.nonastreda.dataset import trimmed_bounds
+from rulfuse.adapters.nonastreda.force_store import ForceStore
+from rulfuse.adapters.nonastreda.trim import span_bounds_causal, span_bounds_omnifuser, trim_bounds
 
 OMNIFUSER_RECORDS = (
     paths.REPO_ROOT.parent / "OmniFuser" / "experiment_results" / "eda" / "records.csv"
@@ -78,8 +78,8 @@ def test_vendored_omnifuser_rule_reproduces_omnifuser():
 
 
 @pytest.mark.data
-def test_causal_trim_agrees_with_omnifuser(dataset):
+def test_causal_trim_agrees_with_omnifuser(data):
     """Acceptance P2: start within 200 samples of OmniFuser's on >= 95 % of passes."""
-    omni = trimmed_bounds(dataset.store, "omnifuser")
-    diffs = np.array([dataset.bounds[k][0] - omni[k][0] for k in omni])
+    omni = trimmed_bounds(data.store, "omnifuser")
+    diffs = np.array([data.bounds[k][0] - omni[k][0] for k in omni])
     assert np.mean(np.abs(diffs) <= 200) >= 0.95

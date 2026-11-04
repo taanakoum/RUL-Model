@@ -5,12 +5,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rulfuse.data.folds import leave_one_tool_out_folds
-from rulfuse.data.normalization import (
+from rulfuse.core.folds import leave_one_unit_out
+from rulfuse.core.normalization import (
     PCA,
     BlockTransform,
     Scaler,
-    baseline_rows,
     causal_baseline,
     relative_to_baseline,
     relative_to_first,
@@ -29,9 +28,9 @@ def _features(seed: int = 0):
 
 def test_poison_validation_and_test_rows_do_not_move_the_fit():
     tools, x = _features()
-    fold = next(iter(leave_one_tool_out_folds(TOOLS)))
+    fold = leave_one_unit_out(TOOLS)[0]
     mask = train_rows(tools, fold)
-    assert set(tools[mask]) == set(fold.train_tools)
+    assert set(tools[mask]) == set(fold.train)
     poisoned = x.copy()
     poisoned[~mask] = 1e6
     a, b = Scaler.fit(x[mask]), Scaler.fit(poisoned[mask])
@@ -99,16 +98,12 @@ def test_rows_before_any_baseline_get_zero():
     np.testing.assert_allclose(base[0], 0.0)
 
 
-def test_relative_to_first_and_baseline_rows():
+def test_relative_to_first():
     photos = np.array([[2.0], [3.0], [5.0]])
     np.testing.assert_allclose(relative_to_first(photos), [[0.0], [1.0], [3.0]])
     np.testing.assert_allclose(
         relative_to_first(photos, np.array([False, True, True])), [[0.0], [0.0], [2.0]]
     )
-    rows = baseline_rows(
-        np.array([1, 1, 2, 3, 9, 10]), recorded_positions=[9, 1, 2, 3, 10], passes=3
-    )
-    assert rows.tolist() == [True, True, True, True, False, False]
 
 
 def test_pca_rejects_empty_input():

@@ -607,8 +607,8 @@ Ruche feature job.
 
 | Modality | Encoder | Why this one | Cost |
 |---|---|---|---|
-| Force (every channel) | **Mantis-8M** (`paris-noah/Mantis-8M`), frozen | A time-series foundation model pretrained for *classification* on diverse public series, whose frozen features are its intended use. Channel-independent, so any sensor set fits. Small (8 M parameters). Already wrapped and cached in Project 14 | 3,777 segments × 4 channels × 20 sub-windows ≈ 300 k windows: minutes on the laptop CPU |
-| Photos (tool, chip, workpiece) | **DINOv2-B/14** (`facebook/dinov2-base`), frozen | Self-supervised general features that keep fine local texture (what wear changes). Not gated. Project 14 wraps the same family | 1,536 photos: about 30 min on the laptop CPU |
+| Force (every channel) | **Mantis-8M** (`paris-noah/Mantis-8M`), frozen | A time-series foundation model pretrained for *classification* on diverse public series, whose frozen features are its intended use. Channel-independent, so any sensor set fits. Small (8 M parameters). Already wrapped and cached in Project 14 | 3,777 segments × 4 channels × 20 sub-windows ≈ 300 k windows: minutes on one A100 (Ruche job J2) |
+| Photos (tool, chip, workpiece) | **DINOv2-B/14** (`facebook/dinov2-base`), frozen | Self-supervised general features that keep fine local texture (what wear changes). Not gated. Project 14 wraps the same family | 1,536 photos: minutes on one A100 (job J2) |
 
 **Level descriptors: the physics features that stay.**
 
@@ -650,8 +650,8 @@ Ruche feature job.
   texture.
 - **Fine-tuning:** LoRA on DINOv2 with the wear target.
 
-**Stage-3 feature check (replaces Gate 1's screening; laptop CPU; no
-ranking).** It only checks that the chosen features work and are clean.
+**Stage-3 feature check (replaces Gate 1's screening; Ruche job J3 on `cpu_short`;
+no ranking).** It only checks that the chosen features work and are clean.
 
 1. **Scale check.** Is a window's Mantis embedding (nearly) unchanged when the
    window is multiplied by 2? If so, the level descriptors alone carry the
@@ -1302,7 +1302,7 @@ Each arm reruns the frozen design, 10 folds × 3 seeds, after the freeze.
 | 2 | Duplicates | OmniFuser's deduplication |
 | 2 | Tokens | Absolute; both (only if not already settled in Gate 2b) |
 | 2 | Trimming | OmniFuser's non-causal 5 %-of-pass reference |
-| 2 | Segment length | 5 s, 20 s (new Mantis extraction on the laptop CPU) |
+| 2 | Segment length | 5 s, 20 s (new Mantis extraction, Ruche job J2) |
 
 Tier 1 must run. Tier 2 runs in the order listed, as time allows.
 
@@ -1368,7 +1368,7 @@ the vendored loader with OmniFuser's whenever both are present.
 | Code, configs, docs, tests | `C:\Users\ali_a\OneDrive\Desktop\RUL Model` (git) | Small; synced |
 | Raw data copy (force, labels, tool, chip, work), stores, caches, runs | `RULFUSE_DATA_ROOT` = `D:\RULModel` | Gigabytes of memory-mapped files must not sync through OneDrive (locks, slow sync) |
 | Python environment | `D:\RULModel\.venv`, Python 3.11 or 3.12 | The encoder libraries (momentfm, mantis-tsfm, chronos-forecasting) lag behind Python 3.14, which OmniFuser's venv uses. The same minor version is used on Ruche |
-| Hugging Face weights | `D:\RULModel\hf_cache` (laptop), `$WORKDIR/hf_cache` (Ruche) | Offline loading |
+| Hugging Face weights | `$WORKDIR/hf_cache` on Ruche only (none on the laptop) | Offline loading in jobs |
 
 ### 14.2 Layout
 
@@ -1416,8 +1416,8 @@ RUL Model/
     tracking.py, resources.py, bundle.py   (vendored)
     cli.py                  rulfuse <command> --dataset nonastreda
   scripts/                  eda_rul.py, end_to_end_trace.py, make_figures.py
-  slurm/                    env.sh, job.sbatch, cpu.sbatch, array.sbatch, chain.sh, status.sh,
-                            checks.sbatch, prefetch_weights.sh
+  slurm/                    env.sh, job.sbatch, cpu.sbatch, checks.sbatch, features.sh, stage3.sh,
+                            chain.sh, status.sh, prefetch_weights.sh (array.sbatch: Stage 4)
   tests/                    §15.2
   docs/                     EDA_RUL.md, END_TO_END.md, RUCHE_RUNBOOK.md, RESULTS.md, archive/
 ```
@@ -1428,11 +1428,13 @@ The Stage 0-2 modules (`rulfuse/data/*`) move into this layout in Stage 3
 ### 14.3 Commands
 
 ```bash
-rulfuse verify-data   --raw $RULFUSE_DATA_ROOT/raw              # hashes, counts, groups, gaps
-rulfuse build-store   --config configs/data.yaml               # trim, timeline, segments, labels
-rulfuse features      --modality force                          # Mantis-8M, laptop CPU
-rulfuse feature-check --out runs/feature-check                  # go/no-go, readouts, leakage
-rulfuse baselines     --out runs/baselines
+rulfuse verify-data                                             # hashes, counts, groups, gaps
+rulfuse build-force-store                                       # the MAT file once, memory-mapped
+rulfuse build-store   --dataset nonastreda                      # adapter -> generic segment store
+rulfuse extract-features --kind signal --encoder mantis8m       # Ruche J2 (GPU)
+rulfuse extract-features --kind image  --encoder dinov2b        # Ruche J2 (GPU)
+rulfuse feature-check                                           # Ruche J3: go/no-go, readouts, leakage
+rulfuse baselines                                               # B0-B2 in seconds
 rulfuse manifest      --study gate2a && sbatch --array=0-59%4 slurm/array.sbatch runs/gate2a/manifest.tsv
 rulfuse aggregate     --study gate2a                            # ensembles, calibration, decision.json
 rulfuse freeze        --config configs/final.yaml              # D15; records the hash
@@ -1535,38 +1537,36 @@ A part is done only when all three pass.
 
 | Work | Where |
 |---|---|
-| Development, tests, stores, all feature extraction, the feature check, baselines, sanity checks | **Laptop CPU**: check idle CPU first (`rulfuse resources`) |
-| Pretrained encoder features (Mantis-8M, DINOv2-B) | **Laptop CPU**, once (minutes for Mantis, about 30 min for DINOv2-B) |
+| Development, tests, small checks, the Stage-4 sanity checks on copied caches | **Laptop CPU**: check idle CPU first (`rulfuse resources`) |
+| Stores, pretrained encoder features (Mantis-8M, DINOv2-B), the feature check | **Ruche** (your instruction of 2026-11-05): jobs J0, J2, J3. The laptop keeps no model weights |
 | Fit arrays (Gates 2-3, sweep, final, Shapley, sensitivity) | Ruche `gpua100`, or a CPU partition if the queue is long (the models are small) |
 | Aggregation and report | Laptop or `cpu_short` |
 
 ### 16.2 One-time setup
 
-Follows OmniFuser's `TRAINING_RUNBOOK_RUCHE.md` §3-§7.
+**The full procedure is `docs/RUCHE_RUNBOOK.md`** (written from OmniFuser's and
+Project 14's Ruche runbooks). In short:
 
 1. `ssh $Ruche`; `cd $WORKDIR` (500 GB, **not backed up**); the `~/.conda`
    symlink to `$WORKDIR/.conda` (home quota 50 GB).
-2. Environment:
+2. Code: `git clone https://github.com/taanakoum/RUL-Model.git` (or the archive
+   from `scripts/pack_for_ruche.ps1 -Code`).
+3. Data: `scripts/pack_for_ruche.ps1` tars the raw copy (about 1.2 GB) with its
+   sha256; `scp` it; `sha256sum -c`; unpack into `$WORKDIR/rul_data/raw`.
+4. Environment:
 
    ```bash
    module load anaconda3/2023.09-0/none-none
    conda create -n rulfuse python=3.11 -y && source activate rulfuse
-   pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu126
+   pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu126
    pip install --no-cache-dir -e ".[test,encoders]"
    ```
 
-3. `slurm/env.sh`, based on Project 14's:
-   - loads the module and activates `rulfuse`;
-   - sets `RULFUSE_DATA_ROOT=$WORKDIR/rul_data` and
-     `HF_HOME=$WORKDIR/hf_cache`;
-   - sets `HF_HUB_OFFLINE=1` inside jobs, and `PYTHONUNBUFFERED=1`.
-4. `bash slurm/prefetch_weights.sh` **on the login node** (Mantis-8M and
-   DINOv2-B). These are needed only if features are ever re-extracted on Ruche;
-   normally the laptop's caches are copied.
-5. Data: `tar` the raw copy (about 1.3 GB); `scp` it to `/workdir/<login>/`;
-   run `rulfuse verify-data` (P1).
-6. Code: a git clone on a `ruche` branch (§19), or a tarball (OmniFuser
-   runbook §5).
+5. `slurm/env.sh` loads the module and activates `rulfuse`; sets
+   `RULFUSE_DATA_ROOT=$WORKDIR/rul_data` and `HF_HOME=$WORKDIR/hf_cache`; sets
+   `HF_HUB_OFFLINE=1` inside jobs, and `PYTHONUNBUFFERED=1`.
+6. `bash slurm/prefetch_weights.sh` **on the login node**: Mantis-8M and
+   DINOv2-B, config and safetensors only (about 380 MB).
 
 ### 16.3 SLURM scripts
 
@@ -1577,7 +1577,9 @@ Follows OmniFuser's `TRAINING_RUNBOOK_RUCHE.md` §3-§7.
 | `array.sbatch` (new) | `--array=0-N%4`: task *i* runs row *i* of a manifest TSV (arm, fold, seeds); finished fits are skipped; `%4` respects the 4-GPU limit per user |
 | `chain.sh` | Only for jobs that can exceed 24 h |
 | `status.sh` | Jobs; finished, running and missing fits per study; logs with errors |
-| `checks.sbatch` | Tests; offline weight loading; GPU check |
+| `checks.sbatch` | Job J0: data verification, stores, baselines, offline weight loading, all tests |
+| `features.sh`, `stage3.sh` | Job J2's body; the Stage-3 submission chain (J0, J0g → J2 → J3) |
+| `prefetch_weights.sh` | Login-node download of the two checkpoints |
 
 ### 16.4 Job plan
 
@@ -1585,9 +1587,11 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 
 | Job | Stage | Content | Tasks | Fits | Estimate |
 |---|---|---|---|---|---|
-| J0 | 4 | Checks: tests, offline weights, GPU | 2 | – | 15 min |
+| J0 | 3 | Checks (`cpu_short`): verify-data, force and segment stores, baselines, offline weights, all tests | 1 | – | 10-20 min |
+| J0g | 3 | GPU check (`gpu_test`) | 1 | – | 1 min |
+| J2 | 3 | Feature caches (`gpua100`): Mantis-8M signals, DINOv2-B photos, scale and determinism checks | 1 | – | 10-30 min |
+| J3 | 3 | Feature check (`cpu_short`): go/no-go, readouts, leakage probe | 1 | – | 2-10 min |
 | J1 | 4 | Pilot: one fold, F1 on the cached features | 1 | 3 | 30 min |
-| J2 | 4 | Store and feature caches on Ruche; signatures equal to the laptop's | 1 | – | 15 min |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds | 60 | 180 | 4-5 GPU-h |
 | J6 | 5 | Gate 2b: 4 options + 1 control × 10 folds | 50 | 150 | 4 GPU-h |
 | J7 | 5 | Sweep: 10 variants × 10 folds | 100 | 300 | 7-8 GPU-h |
@@ -1597,7 +1601,7 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J12 | 8 | Sensitivity tier 1 (5 refit arms) / tier 2 (up to 9 arms + features) | 50 / 90 | 150 / 270 | 4 / 8 GPU-h |
 | J13 | 9 | Report | 1 | – | 15 min |
 
-The total is about 40-50 A100-hours (no feature jobs: the features come from the laptop). Submit arrays in the evening; run
+The total is about 40-50 A100-hours (the Stage-3 feature job adds under one). Submit arrays in the evening; run
 `status.sh` each morning.
 
 ### 16.5 Safe practice
@@ -1633,8 +1637,8 @@ S9 Report                                            ████████
 **Critical path:** S0 → S2 → S4 → S5 → S6 → S7 → S8 → S9.
 
 - S1 must settle the time axis (D12) before S2's labels are final.
-- S3 (laptop features and the feature check) runs beside S4 and must finish
-  before S5 starts. It no longer needs Ruche.
+- S3 (the core/adapter refactor on the laptop; features and the feature check on
+  Ruche, jobs J0-J3) runs beside S4 and must finish before S5 starts.
 
 **Minimum viable result**, if time runs short: S0-S4, then F1 only in S5, then
 the Student-t head with out-of-fold calibration in S6, then S7 and Shapley
@@ -1693,8 +1697,9 @@ the Student-t head with out-of-fold calibration in S6, then S7 and Shapley
 
 #### Stage 3: Core/adapter refactor, features and the feature check (Tue Nov 10 to Sat Nov 14)
 
-- **Goal:** a dataset-agnostic core behind a Nonastreda adapter; cached Mantis-8M and DINOv2-B features, checked and leak-tested.
-  No encoder comparison and no Ruche.
+- **Goal:** a dataset-agnostic core behind a Nonastreda adapter; cached Mantis-8M and
+  DINOv2-B features, checked and leak-tested, computed on Ruche (your instruction of
+  2026-11-05). No encoder comparison.
 - **Tasks:**
   - the core/adapter refactor of the Stage 0-2 code (D18): the generic
     schema, `rulfuse/adapters/nonastreda/`, the toy adapter and the
@@ -1703,8 +1708,9 @@ the Student-t head with out-of-fold calibration in S6, then S7 and Shapley
   - the vendored Mantis-8M and DINOv2-B wrappers;
   - the level descriptors (Project 14's `level_descriptors` and
     `slow_summary`);
-  - the feature caches, run on the laptop at low priority: 3,777 × 4 channel
-    vectors and 1,536 photos;
+  - the Ruche setup (`docs/RUCHE_RUNBOOK.md`, `slurm/`) and jobs J0, J0g, J2, J3
+    (`bash slurm/stage3.sh`): the feature caches of 3,777 × 4 channel vectors and
+    1,536 photos, then the feature check;
   - the full handcrafted set H, for baseline B4;
   - the feature check of §6.2: scale check, go/no-go, cross-fitted readouts,
     leakage probe.
@@ -1723,8 +1729,9 @@ the Student-t head with out-of-fold calibration in S6, then S7 and Shapley
     augmentation, `train.py`;
   - `uncertainty.py` (mixture, calibration (a)-(c), the filter);
   - `baselines.py`, `degradation.py`, `evaluation.py`, `stats.py`;
-  - the diagnostics; the seven sanity checks (laptop);
-  - Ruche setup and jobs J0-J2 (checks, pilot, store and caches).
+  - the diagnostics; the seven sanity checks (laptop, on the caches copied
+    from Ruche);
+  - pilot job J1 (`slurm/array.sbatch` and manifests arrive here).
 - **Outputs:** sanity-check report in `PROJECT_LOG.md`; baselines in
   `runs/baselines`.
 - **Verification:** P10-P17.

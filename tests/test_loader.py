@@ -12,15 +12,15 @@ import pytest
 from helpers import label_row, write_label_csvs
 
 from rulfuse import paths
-from rulfuse.data.force_store import ForceStore, sha256_file
-from rulfuse.data.nonastreda import (
+from rulfuse.adapters.nonastreda.force_store import ForceStore, sha256_file
+from rulfuse.adapters.nonastreda.load import (
     decode_record_id,
     duplicate_groups,
     load_labels,
     parse_datastore,
     read_csv,
 )
-from rulfuse.verify import verify_data
+from rulfuse.adapters.nonastreda.verify import verify_data
 
 OMNIFUSER_RECORDS = (
     paths.REPO_ROOT.parent / "OmniFuser" / "experiment_results" / "eda" / "records.csv"

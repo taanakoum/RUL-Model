@@ -74,7 +74,11 @@ def fit_ridge_cv(
     x: np.ndarray, y: np.ndarray, groups: np.ndarray, alphas: Sequence[float] = ALPHAS
 ) -> Ridge:
     x, y = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
-    alpha = select_alpha(x, y, groups, alphas) if len(set(np.asarray(groups).tolist())) > 1 else alphas[len(alphas) // 2]
+    alpha = (
+        select_alpha(x, y, groups, alphas)
+        if len(set(np.asarray(groups).tolist())) > 1
+        else alphas[len(alphas) // 2]
+    )
     return fit_ridge(x, y, alpha)
 
 
@@ -87,7 +91,11 @@ def cross_fitted_readout(
 ) -> np.ndarray:
     """Readout of every row; a row's own unit's labels are never used for it. Labels of
     units outside ``train_groups`` are never used at all."""
-    x, y, groups = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64), np.asarray(groups)
+    x, y, groups = (
+        np.asarray(x, dtype=np.float64),
+        np.asarray(y, dtype=np.float64),
+        np.asarray(groups),
+    )
     out = np.full(len(x), np.nan)
     train = np.isin(groups, list(train_groups)) & np.isfinite(y)
     for group in train_groups:
@@ -119,7 +127,11 @@ def probe_folds(
     shuffle_seed: int | None = None,
 ) -> dict:
     """Per fold: validation MAE of the ridge probe and of the training-mean predictor."""
-    x, y, groups = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64), np.asarray(groups)
+    x, y, groups = (
+        np.asarray(x, dtype=np.float64),
+        np.asarray(y, dtype=np.float64),
+        np.asarray(groups),
+    )
     ok = np.isfinite(y) & np.isfinite(x).all(axis=1)
     rng = np.random.default_rng(shuffle_seed) if shuffle_seed is not None else None
     rows = []

@@ -160,7 +160,9 @@ def _segment_inputs(
     rec_start = int(seg["recording_start_sample"][row])
     start, end = int(seg["start_sample"][row]), int(seg["end_sample"][row])
     head_n = max(1, int(DRIFT_HEAD_SECONDS * s.sample_rate_hz))
-    head = resample(expand(array[rec_start : rec_start + head_n], channels), s.sample_rate_hz, s.model_rate_hz)
+    head = resample(
+        expand(array[rec_start : rec_start + head_n], channels), s.sample_rate_hz, s.model_rate_hz
+    )
     segment = resample(expand(array[start:end], channels), s.sample_rate_hz, s.model_rate_hz)
     return segment, head.mean(axis=0, dtype=np.float64)
 
@@ -197,7 +199,9 @@ def extract_signal_features(
     meta, new = _check_or_create(folder, signature, shapes)
     if new:
         for name, shape in shapes.items():
-            np.lib.format.open_memmap(folder / f"{name}.npy", "w+", np.float32, tuple(shape)).flush()
+            np.lib.format.open_memmap(
+                folder / f"{name}.npy", "w+", np.float32, tuple(shape)
+            ).flush()
         _save_npy(folder / "done.npy", np.zeros(n, dtype=bool))
         _write_json(folder / "meta.json", meta)
     arrays = {name: np.load(folder / f"{name}.npy", mmap_mode="r+") for name in shapes}
@@ -205,7 +209,10 @@ def extract_signal_features(
     todo = np.flatnonzero(~done)
     if limit is not None:
         todo = todo[:limit]
-    log(f"[features] {store.dataset} {encoder.name}: {len(todo)} segments to encode, {int(done.sum())} cached")
+    log(
+        f"[features] {store.dataset} {encoder.name}: {len(todo)} segments to encode, "
+        f"{int(done.sum())} cached"
+    )
     t0 = time.perf_counter()
     cache: dict = {}
     order = todo[np.argsort(store.segments["source"][first[todo]], kind="stable")]
@@ -229,7 +236,11 @@ def extract_signal_features(
             array.flush()
         done[ids] = True
         _save_npy(folder / "done.npy", done)
-        meta.update(n_done=int(done.sum()), complete=bool(done.all()), updated=time.strftime("%Y-%m-%d %H:%M"))
+        meta.update(
+            n_done=int(done.sum()),
+            complete=bool(done.all()),
+            updated=time.strftime("%Y-%m-%d %H:%M"),
+        )
         _write_json(folder / "meta.json", meta)
         rate = (begin + len(ids)) / max(time.perf_counter() - t0, 1e-9)
         log(f"[features] {begin + len(ids)}/{len(order)} segments ({rate:.1f}/s)")
@@ -262,7 +273,9 @@ def find_features(store: SegmentStore, kind: str, encoder: str, root: Path | Non
         if meta["signature"]["store"] == store.signature and meta.get("complete"):
             matches.append(meta_path.parent)
     if len(matches) != 1:
-        raise FileNotFoundError(f"{len(matches)} complete {kind}-{encoder} caches for {store.signature} in {base}")
+        raise FileNotFoundError(
+            f"{len(matches)} complete {kind}-{encoder} caches for {store.signature} in {base}"
+        )
     return matches[0]
 
 
@@ -319,7 +332,9 @@ def extract_image_features(
     shapes = {"tokens": [n, encoder.n_tokens, encoder.dim]}
     meta, new = _check_or_create(folder, signature, shapes)
     if new:
-        np.lib.format.open_memmap(folder / "tokens.npy", "w+", np.float16, tuple(shapes["tokens"])).flush()
+        np.lib.format.open_memmap(
+            folder / "tokens.npy", "w+", np.float16, tuple(shapes["tokens"])
+        ).flush()
         _save_npy(folder / "done.npy", np.zeros(n, dtype=bool))
         _write_json(folder / "meta.json", meta)
     tokens = np.load(folder / "tokens.npy", mmap_mode="r+")
@@ -333,15 +348,24 @@ def extract_image_features(
         log(f"[features] {store.dataset} {encoder.name} {kind}: {len(todo)} images to encode")
         for begin in range(0, len(todo), batch):
             rows = todo[begin : begin + batch]
-            pixels = np.stack([normalize(prepared_pixels(store.image_path(r), specs[kind])) for r in rows])
+            pixels = np.stack(
+                [normalize(prepared_pixels(store.image_path(r), specs[kind])) for r in rows]
+            )
             tokens[rows] = encoder.encode(pixels).astype(np.float16)
             tokens.flush()
             done[rows] = True
             _save_npy(folder / "done.npy", done)
             encoded += len(rows)
-            meta.update(n_done=int(done.sum()), complete=bool(done.all()), updated=time.strftime("%Y-%m-%d %H:%M"))
+            meta.update(
+                n_done=int(done.sum()),
+                complete=bool(done.all()),
+                updated=time.strftime("%Y-%m-%d %H:%M"),
+            )
             _write_json(folder / "meta.json", meta)
-            log(f"[features] {kind}: {begin + len(rows)}/{len(todo)} ({encoded / max(time.perf_counter() - t0, 1e-9):.2f} images/s)")
+            log(
+                f"[features] {kind}: {begin + len(rows)}/{len(todo)} "
+                f"({encoded / max(time.perf_counter() - t0, 1e-9):.2f} images/s)"
+            )
     meta.update(n_done=int(done.sum()), complete=bool(done.all()))
     _write_json(folder / "meta.json", meta)
     del tokens

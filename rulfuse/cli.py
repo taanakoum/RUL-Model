@@ -1,4 +1,8 @@
-"""Command line: ``rulfuse <command>`` (PROJECT_PLAN.md §14.3). Stages 0-1 commands."""
+"""Command line: ``rulfuse <command>`` (PROJECT_PLAN.md §14.3).
+
+Dataset-specific commands (``verify-data``, ``build-force-store``) belong to the Nonastreda
+adapter; everything else takes ``--dataset`` and works on the generic store.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +20,33 @@ def _write_json(obj: object, out: Path) -> None:
     print(f"wrote {out}")
 
 
+def _nonastreda_options(args: argparse.Namespace) -> dict:
+    return {
+        "trim_rule": args.trim_rule,
+        "axis": args.axis,
+        "attach": args.attach,
+        "count_leading": args.count_leading,
+        "ttf_rule": args.ttf_rule,
+        "raw": args.raw,
+        "store_dir": args.force_store,
+    }
+
+
+def _dataset(args: argparse.Namespace):
+    from rulfuse.adapters import load_dataset
+
+    return load_dataset(args.dataset, **_nonastreda_options(args))
+
+
+def _dataset_and_store(args: argparse.Namespace):
+    """The adapter's dataset and its (built or reused) segment store."""
+    from rulfuse.core.store import SegmentStore, build_segment_store
+
+    ds = _dataset(args)
+    store = SegmentStore.open(build_segment_store(ds))
+    return ds, store
+
+
 def cmd_resources(_: argparse.Namespace) -> int:
     from rulfuse.resources import check_resources
 
@@ -24,7 +55,7 @@ def cmd_resources(_: argparse.Namespace) -> int:
 
 
 def cmd_verify_data(args: argparse.Namespace) -> int:
-    from rulfuse.verify import verify_data
+    from rulfuse.adapters.nonastreda.verify import verify_data
 
     report = verify_data(args.raw, args.repo_data)
     _write_json(report, args.out)
@@ -38,8 +69,8 @@ def cmd_verify_data(args: argparse.Namespace) -> int:
 
 
 def cmd_build_force_store(args: argparse.Namespace) -> int:
-    from rulfuse.data.force_store import ForceStore, build_force_store
-    from rulfuse.data.nonastreda import load_labels
+    from rulfuse.adapters.nonastreda.force_store import ForceStore, build_force_store
+    from rulfuse.adapters.nonastreda.load import load_labels
     from rulfuse.resources import ResourcesBusy, check_resources
 
     try:
@@ -49,8 +80,7 @@ def cmd_build_force_store(args: argparse.Namespace) -> int:
         return 2
     print(f"resources: {status.describe()}")
     out = build_force_store(args.raw, args.out, load_labels(args.raw))
-    store = ForceStore.open(out)
-    print(json.dumps(store.meta, indent=1))
+    print(json.dumps(ForceStore.open(out).meta, indent=1))
     return 0
 
 
@@ -66,17 +96,9 @@ def cmd_hub_check(args: argparse.Namespace) -> int:
 
 
 def cmd_build_store(args: argparse.Namespace) -> int:
-    from rulfuse.data.dataset import DatasetOptions, load_dataset
-    from rulfuse.data.segment_store import SegmentStore, build_segment_store
+    from rulfuse.core.store import SegmentStore, build_segment_store
 
-    options = DatasetOptions(
-        trim_rule=args.trim_rule,
-        axis=args.axis,
-        attach=args.attach,
-        count_leading=args.count_leading,
-        ttf_rule=args.ttf_rule,
-    )
-    ds = load_dataset(options, raw=args.raw, store_dir=args.force_store)
+    ds = _dataset(args)
     out = build_segment_store(ds, args.out, force=args.rebuild)
     store = SegmentStore.open(out)
     print(f"segment store {store.signature} at {out}")
@@ -85,59 +107,168 @@ def cmd_build_store(args: argparse.Namespace) -> int:
 
 
 def cmd_store_info(args: argparse.Namespace) -> int:
-    from rulfuse.data.segment_store import SegmentStore
+    from rulfuse.core.store import SegmentStore
 
-    roots = [args.path] if args.path else sorted((paths.interim_dir() / "segments").glob("*/"))
+    if args.path:
+        roots = [args.path]
+    else:
+        roots = sorted(p.parent for p in (paths.interim_dir() / "segments").glob("*/*/meta.json"))
     for root in roots:
         store = SegmentStore.open(root)
-        print(f"{store.signature}  {json.dumps(store.meta['payload']['options'])}")
+        options = store.meta["payload"]["provenance"].get("options", {})
+        print(f"{store.dataset}/{store.signature}  {json.dumps(options)}")
         print(f"  {json.dumps(store.meta['counts'])}")
     return 0
+
+
+def cmd_extract_features(args: argparse.Namespace) -> int:
+    from rulfuse.features import cache, check, encoders
+
+    ds, store = _dataset_and_store(args)
+    print(f"store {store.dataset}/{store.signature}")
+    if args.kind == "signal":
+        encoder = encoders.series_encoder(args.encoder or "mantis8m", args.device)
+        features = cache.extract_signal_features(
+            store, ds.signals, encoder, args.features_root, chunk=args.chunk, limit=args.limit
+        )
+        print(f"cache {features.folder}: {int(features.done.sum())}/{len(features.done)} done")
+        if features.complete and not args.skip_checks:
+            checks = {
+                "scale_check": check.scale_check(store, ds.signals, encoder),
+                "determinism": check.determinism_check(store, ds.signals, encoder, features),
+            }
+            _write_json(checks, features.folder / "checks.json")
+            print(json.dumps(checks, indent=1))
+    else:
+        encoder = encoders.image_encoder(args.encoder or "dinov2b", args.device)
+        features = cache.extract_image_features(
+            store, encoder, args.features_root, kinds=args.kinds, batch=args.batch, limit=args.limit
+        )
+        print(f"cache {features.folder}: {int(features.done.sum())}/{len(features.done)} done")
+    return 0
+
+
+def cmd_feature_check(args: argparse.Namespace) -> int:
+    from rulfuse.features import cache
+    from rulfuse.features.check import feature_check
+
+    _, store = _dataset_and_store(args)
+    signal = cache.SignalFeatures.open(
+        cache.find_features(store, "signal", args.signal_encoder, args.features_root)
+    )
+    image = None
+    if args.image_encoder != "none":
+        image = cache.ImageFeatures.open(
+            cache.find_features(store, "image", args.image_encoder, args.features_root)
+        )
+    checks_path = signal.folder / "checks.json"
+    extra = json.loads(checks_path.read_text(encoding="utf-8")) if checks_path.is_file() else {}
+    report = feature_check(store, signal, image, extra=extra)
+    out = args.out or paths.runs_dir() / "feature-check" / f"{store.dataset}-{store.signature}.json"
+    _write_json(report, out)
+    print(json.dumps(report["decisions"], indent=1))
+    return 0
+
+
+def cmd_baselines(args: argparse.Namespace) -> int:
+    from rulfuse.baselines import score_usage_baselines
+    from rulfuse.core.folds import leave_one_unit_out
+
+    _, store = _dataset_and_store(args)
+    result = score_usage_baselines(store, leave_one_unit_out(store.unit_names))
+    out = (
+        args.out or paths.runs_dir() / "baselines" / f"usage-{store.dataset}-{store.signature}.json"
+    )
+    _write_json(result, out)
+    for name, row in result["summary"].items():
+        print(f"{name}: " + ", ".join(f"{k} {v:.3f}" for k, v in row.items()))
+    return 0
+
+
+def _add_dataset_options(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--dataset", default="nonastreda", choices=["nonastreda"])
+    p.add_argument(
+        "--raw", type=Path, default=None, help="default: $RULFUSE_DATA_ROOT/raw/<dataset>"
+    )
+    p.add_argument("--force-store", type=Path, default=None, help="default: interim/forces")
+    p.add_argument("--trim-rule", default="causal", choices=["causal", "omnifuser"])
+    p.add_argument("--axis", default="gap", choices=["gap", "recorded"])
+    p.add_argument("--attach", default="latest", choices=["latest", "every", "dedup"])
+    p.add_argument("--count-leading", action="store_true")
+    p.add_argument(
+        "--ttf-rule",
+        default="confirmed",
+        choices=["confirmed", "literal", "wear110", "tool_label3", "dulled_onwards"],
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rulfuse")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    segments = sub.add_parser("build-store", help="segment store for one set of data options")
-    segments.add_argument("--raw", type=Path, default=paths.raw_dir())
-    segments.add_argument("--force-store", type=Path, default=paths.force_store_dir())
-    segments.add_argument("--out", type=Path, default=None, help="default: interim/segments/<sig>")
-    segments.add_argument("--trim-rule", default="causal", choices=["causal", "omnifuser"])
-    segments.add_argument("--axis", default="gap", choices=["gap", "recorded"])
-    segments.add_argument("--attach", default="latest", choices=["latest", "every", "dedup"])
-    segments.add_argument("--count-leading", action="store_true")
-    segments.add_argument(
-        "--ttf-rule",
-        default="confirmed",
-        choices=["confirmed", "literal", "wear110", "tool_label3", "dulled_onwards"],
+    p = sub.add_parser("build-store", help="segment store for one set of dataset options")
+    _add_dataset_options(p)
+    p.add_argument(
+        "--out", type=Path, default=None, help="default: interim/segments/<dataset>/<sig>"
     )
-    segments.add_argument("--rebuild", action="store_true", help="rebuild even if it exists")
-    segments.set_defaults(func=cmd_build_store)
+    p.add_argument("--rebuild", action="store_true", help="rebuild even if it exists")
+    p.set_defaults(func=cmd_build_store)
 
-    info = sub.add_parser("store-info", help="signature, options and counts of segment stores")
-    info.add_argument("path", nargs="?", type=Path, default=None)
-    info.set_defaults(func=cmd_store_info)
+    p = sub.add_parser("store-info", help="signature, options and counts of segment stores")
+    p.add_argument("path", nargs="?", type=Path, default=None)
+    p.set_defaults(func=cmd_store_info)
+
+    p = sub.add_parser("extract-features", help="encode segments or images into a cache")
+    _add_dataset_options(p)
+    p.add_argument("--kind", required=True, choices=["signal", "image"])
+    p.add_argument(
+        "--encoder",
+        default=None,
+        help="signal: mantis8m (default) | projection; image: dinov2b (default) | pixelstats",
+    )
+    p.add_argument("--device", default="auto", help="auto | cpu | cuda")
+    p.add_argument("--kinds", nargs="*", default=None, help="image types (default: all)")
+    p.add_argument("--chunk", type=int, default=64, help="segments per encoder call")
+    p.add_argument("--batch", type=int, default=16, help="images per encoder call")
+    p.add_argument(
+        "--limit", type=int, default=None, help="encode at most this many now (smoke tests)"
+    )
+    p.add_argument("--skip-checks", action="store_true", help="no scale or determinism check")
+    p.add_argument("--features-root", type=Path, default=None, help="default: interim/features")
+    p.set_defaults(func=cmd_extract_features)
+
+    p = sub.add_parser("feature-check", help="Stage-3 go/no-go, readouts and leakage probe")
+    _add_dataset_options(p)
+    p.add_argument("--signal-encoder", default="mantis8m")
+    p.add_argument("--image-encoder", default="dinov2b", help="or 'none'")
+    p.add_argument("--features-root", type=Path, default=None, help="default: interim/features")
+    p.add_argument("--out", type=Path, default=None)
+    p.set_defaults(func=cmd_feature_check)
+
+    p = sub.add_parser("baselines", help="usage-only baselines B0-B2 (seconds)")
+    _add_dataset_options(p)
+    p.add_argument("--out", type=Path, default=None)
+    p.set_defaults(func=cmd_baselines)
 
     sub.add_parser("resources", help="idle CPUs and free memory").set_defaults(func=cmd_resources)
 
-    verify = sub.add_parser("verify-data", help="hashes, counts and gaps of the raw copy")
-    verify.add_argument("--raw", type=Path, default=paths.raw_dir())
-    verify.add_argument("--repo-data", type=Path, default=paths.REPO_ROOT / "Data")
-    verify.add_argument(
-        "--out", type=Path, default=paths.runs_dir() / "verify" / "verify-data.json"
+    p = sub.add_parser("verify-data", help="Nonastreda: hashes, counts and gaps of the raw copy")
+    p.add_argument("--raw", type=Path, default=paths.raw_dir())
+    p.add_argument("--repo-data", type=Path, default=paths.REPO_ROOT / "Data")
+    p.add_argument("--out", type=Path, default=paths.runs_dir() / "verify" / "verify-data.json")
+    p.set_defaults(func=cmd_verify_data)
+
+    p = sub.add_parser(
+        "build-force-store", help="Nonastreda: read the MAT file once into a memmap store"
     )
-    verify.set_defaults(func=cmd_verify_data)
+    p.add_argument("--raw", type=Path, default=paths.raw_dir())
+    p.add_argument("--out", type=Path, default=paths.force_store_dir())
+    p.add_argument("--min-memory-mb", type=float, default=1500.0)
+    p.set_defaults(func=cmd_build_force_store)
 
-    store = sub.add_parser("build-force-store", help="read the MAT file once into a memmap store")
-    store.add_argument("--raw", type=Path, default=paths.raw_dir())
-    store.add_argument("--out", type=Path, default=paths.force_store_dir())
-    store.add_argument("--min-memory-mb", type=float, default=1500.0)
-    store.set_defaults(func=cmd_build_force_store)
-
-    hub = sub.add_parser("hub-check", help="planned checkpoints exist / gated (metadata only)")
-    hub.add_argument("--out", type=Path, default=paths.runs_dir() / "verify" / "hub-check.json")
-    hub.set_defaults(func=cmd_hub_check)
+    p = sub.add_parser("hub-check", help="planned checkpoints exist / gated (metadata only)")
+    p.add_argument("--out", type=Path, default=paths.runs_dir() / "verify" / "hub-check.json")
+    p.set_defaults(func=cmd_hub_check)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

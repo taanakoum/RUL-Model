@@ -4,14 +4,14 @@ The running record of what was built, how it was checked, what was decided and w
 plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 [PLAN_REVIEW.md](PLAN_REVIEW.md). Newest stage last; the status table is kept current.
 
-## Status at a glance (updated 2026-11-04)
+## Status at a glance (updated 2026-11-05)
 
 | Stage | State | Evidence |
 |---|---|---|
 | S0 Foundations | **Done** (2026-11-04) | `rulfuse verify-data` ok; tests, ruff and pyright clean |
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
 | S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
-| S3 Core/adapter refactor, features, Gate 1 | Next (plan changed 2026-11-04: seconds only, 3 seeds, generic core) | – |
+| S3 Core/adapter refactor, features, feature check | **Code done** (2026-11-05); **Ruche jobs J0-J3 waiting for you** | Refactored store identical to Stage 2's; 111 tests (109 pass, 2 need the weights: they run in J0); ruff and pyright clean; [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) |
 | S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
@@ -21,7 +21,14 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 2. The Nonastreda paper does not explain the workpiece-photo change, so the default
    stands: per-image standardization plus the Gate-1 leakage probe.
 
-**Needs you:** nothing blocking. Plan §19 questions 3-7 run on their defaults.
+**Needs you:**
+
+1. Commit and push (suggested groups at the end of the Stage 3 section), then run Stage 3 on
+   Ruche: [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) Part A once, then
+   `bash slurm/stage3.sh` (§11). I cannot log in to Ruche: it needs your password.
+2. Copy the report and the caches home (§13) and tell me; I then log the decisions.
+
+Plan §19 questions 3-7 run on their defaults.
 
 ## How to reproduce
 
@@ -385,3 +392,126 @@ rules, the photo crops and the workpiece standardization, flank-wear smoothing, 
   descriptor.
 - `metrics.mae_eq` and the passes baselines are removed; `baselines.py` keeps seconds.
 - No code was changed in this step.
+
+
+---
+
+## Stage 3: core/adapter refactor, features and the feature check (2026-11-05)
+
+Your instructions this stage: start implementing Stage 3; download the encoders and run the
+experiments **on Ruche, not on the laptop**; delete any weights already downloaded that
+are not needed, and verify; write a comprehensive Ruche runbook learning from OmniFuser.
+
+### Weights on the laptop: none were downloaded
+
+Checked on 2026-11-05: no Mantis-8M or DINOv2-B snapshot exists on this machine from this
+project. `D:\RULModel\hf_cache` holds only a 5.8 KB metadata file left by the Stage-0
+`hub-check`; `~\.cache\huggingface` and `~\.cache\torch` hold other projects' models
+(dated before this project). Project 14's cache (`D:\Project14\hf_cache`, which includes
+Mantis-8M) belongs to Project 14 and was not touched. Nothing needed deleting.
+
+What *was* installed on the laptop: the `encoders` packages into `D:\RULModel\.venv`
+(torch 2.15.0+cpu, transformers 5.22.1, mantis-tsfm 1.1.0). They are code, not weights;
+the tests use them to check the wrappers on tiny random networks, and Stage 4's sanity
+checks need torch. They can be removed with
+`uv pip uninstall --python D:\RULModel\.venv\Scripts\python.exe transformers mantis-tsfm`
+if you prefer (the two wrapper tests then skip).
+
+### What was built
+
+| Part | Files | Content |
+|---|---|---|
+| Generic schema (D18) | `rulfuse/core/schema.py` | `Dataset`, `Unit`, `Recording` (start, duration, `SignalRef`, HI, stage, group, `attrs`), `Image` (type, availability time), `ChannelSpec`, `ImageSpec`, `Settings` (H, rates, B, S), `SignalSource`; `validate()` lists every broken rule |
+| Generic core | `rulfuse/core/{segments,targets,channels,folds,normalization,images,store}.py` | Segmentation and sub-windows; RUL in seconds, cap, window; magnitude of 3-axis groups and the 7 level descriptors (drift new); leave-one-unit-out in the adapter's order; normalization; image preparation from a spec; the generic segment store (`recordings`, `segments`, `images` tables) |
+| Nonastreda adapter | `rulfuse/adapters/nonastreda/{load,force_store,trim,timeline,failure,images,dataset,verify,audit}.py` | Everything Nonastreda-specific, moved from `rulfuse/data/`; `to_units()` maps passes to recordings, photos to images, flank wear to the HI, `tool_label` to the stage, runs to groups |
+| Toy adapter | `rulfuse/adapters/toy.py` | 2 accelerometer channels at 2 kHz, one image type, H = 600 s, no gaps or duplicates |
+| Encoders | `rulfuse/features/encoders.py` | Mantis-8M and DINOv2-B wrappers vendored from Project 14 (dinov2-base instead of -small, one 2 × 4 grid for all types, injectable networks); weight-free stand-ins for tests |
+| Caches | `rulfuse/features/cache.py` | Signal cache per distinct segment (embeddings mean+sd, descriptors, spectral H) and image cache per photo; resumable; foreign signatures refused |
+| Handcrafted H | `rulfuse/features/handcrafted.py` | 11 spectral features relative to the model rate (8 octave bands, centroid, entropy, RMS of the difference); the generic mean/RMS diagnostics |
+| Probes | `rulfuse/features/probe.py` | Ridge with α by inner leave-one-unit-out (SVD path); cross-fitted readouts; fold-wise go/no-go with the shuffled control |
+| Feature check | `rulfuse/features/check.py` | Scale and determinism checks, go/no-go per feature set, readouts, leakage probe (LOO PCA + readout), HI reference, decisions |
+| Generic audit, baselines, metrics | `rulfuse/audit.py`, `baselines.py`, `metrics.py` | `stage_steps` on any (unit, group, stage) rows; B0-B2 in seconds from the store; `mae_eq` removed |
+| CLI | `rulfuse/cli.py` | `--dataset` everywhere; new `extract-features`, `feature-check`, `baselines`, `--features-root` |
+| Ruche | `slurm/{env.sh,job.sbatch,cpu.sbatch,checks.sbatch,features.sh,stage3.sh,chain.sh,status.sh,prefetch_weights.sh}`, `scripts/pack_for_ruche.ps1`, `.gitattributes` | OmniFuser's and Project 14's patterns; one command submits the Stage-3 chain |
+| Runbook | `docs/RUCHE_RUNBOOK.md` | Setup, Stage 3 step by step with the expected log lines, reading the report, copying home, troubleshooting, OmniFuser lessons |
+| Tests | `tests/test_{schema,transfer_contract,store,targets,failure,encoders,cache,probe}.py` (new); the others ported | 111 tests |
+| Scripts | `scripts/{eda_rul,end_to_end_trace,validate_stage2}.py` | Ported to the adapter and the generic store; [docs/END_TO_END.md](docs/END_TO_END.md) regenerated |
+
+### Verification
+
+| Check | Result |
+|---|---|
+| Refactor regression: the new store (`nonastreda/3e357b5a23ff`) against Stage 2's (`8d2b69c23453`), row by row | All 5,125 segments equal in unit, recording, segment, signal presence, e, τ, prediction flag, RUL and capped targets (max difference 0.0), window, baseline flag, distinct id, sample bounds and source; failure times equal; image visibility agrees on 400 random points |
+| Counts | 512 recordings, 5,125 segments, 3,747 prediction points, 1,361 window points, 951 signal-missing points, 3,777 distinct segments, 1,536 images |
+| Baselines from the generic store (P16) | B0 412.0 s, B1 512.5 s, B2 467.8 s, B2 coverage 0.503, Winkler 5,388: equal to plan §2.7 |
+| P22 transfer contract | The core, `features`, `audit`, `baselines` and `metrics` import nothing from `rulfuse.adapters` (AST test) and use none of the Nonastreda vocabulary in code (identifiers and strings, docstrings excluded). The toy adapter runs schema → store → features → probes → readouts → leakage probe → baselines without any core change; the probe beats the mean on the toy and the shuffled control collapses |
+| P8 encoders and caches | Mantis and DINOv2 wrappers on random networks: shapes, determinism, CLS + 2 × 4 grid pooling equal to a manual computation; vectorized descriptors equal Project 14's functions; known RMS, crest, kurtosis, slope, drift; level survives scaling (log RMS moves by log 2) while kurtosis does not; resume gives the same cache; a foreign signature is refused; duplicates share a row |
+| P9 probes | Ridge recovers known coefficients; a cross-fitted readout is unchanged when its own unit's labels change, and labels outside training are never read; shuffled control collapses; the leakage PCA is fitted without the projected unit |
+| Real-data smoke run of J2's commands with the weight-free stand-ins (40 segments, 6 photos, into a scratch folder, deleted after) | Works; about 77 segments/s of CPU-side work (reading, descriptors, spectral) on the laptop |
+| `docs/END_TO_END.md` trace | Same numbers as Stage 2 (T5R3B2: trim 430-96,478, τ = 909.7 s, RUL = 917.3 s); the Fz drift descriptor equals the old Fz_rel mean (−10.37 N) |
+| Tests, lint, types | 111 tests: 109 pass, 2 skip (`weights`: they load the real checkpoints and run in Ruche job J0); ruff and pyright clean |
+
+**Not yet run (needs Ruche):** the Mantis and DINOv2 caches, the scale and determinism
+checks, the go/no-go probes, readouts and leakage probe on the real features. Their
+expected log lines and acceptance rules are in the runbook (§11.2, §11.4).
+
+### Decisions taken (defaults and educated guesses)
+
+| Decision | Choice | Why |
+|---|---|---|
+| Where Stage 3 runs | Ruche jobs J0 (checks, `cpu_short`), J0g (GPU check, `gpu_test`), J2 (features, `gpua100`), J3 (feature check, `cpu_short`), chained by `slurm/stage3.sh` | Your instruction; the CPU work goes to CPU partitions so no GPU waits on it |
+| What goes to Ruche | The raw copy only (1.2 GB tar with sha256); Ruche rebuilds the force store, the segment store and the caches | Results do not depend on files made on Windows; the store signature must match the laptop's, which J0 shows |
+| Weights | Prefetched on the login node, config + safetensors only (about 380 MB; DINOv2's duplicate `pytorch_model.bin` skipped); none on the laptop; MOMENT only if the force check fails | Your instruction; offline jobs |
+| Drift descriptor | Segment mean − mean of the recording's first second | The causal generic version of Fz_rel; equals it on Fz |
+| Image tokens | One 2 × 4 grid for every image type (9 tokens), DINOv2-B (768) | A fixed token count for any image type (generic); plan §5.8 |
+| Leakage rule | A type leaks if a stage boundary is its largest group step in more than 3 of 10 units, over its first 3 PCs and its readout | Plan §6.2; PCA fitted without the projected unit, so no unit's own data shapes its basis |
+| Go/no-go | The probe's mean validation MAE over the 10 folds below the training-mean predictor's | Plan §6.2 |
+| Determinism tolerance | Relative 1e-3 | A100 kernels and TF32 convolutions change the last digits between batch sizes |
+| Handcrafted H | Generic spectral features relative to the model rate; the spindle-line and synchronous-average features dropped | D17, D18; H is for B4 and diagnostics only |
+| Store location | `interim/segments/<dataset>/<signature>/` | Several datasets can coexist |
+
+### Problems found and fixed
+
+1. **Float32 drift reference.** A test that recomputed the drift in float32 differed from
+   the cache by 1e-4 N; the cache accumulates the head mean in float64, which is right.
+   The test now does the same.
+2. **Vocabulary test caught docstrings.** The first version flagged docstring lines that
+   explain where an idea came from; it now inspects identifiers and string constants
+   through the AST.
+3. **`Dinov2Config` has no `intermediate_size`** in transformers 5; the test uses
+   `mlp_ratio`.
+4. **The old END_TO_END.md said T5R3B2 has `tool_label` 1**; `labels.csv` says 2. Corrected.
+5. Two unspecified-behaviour risks in the cache (fancy-assignment order for the first row
+   of each distinct segment; the sub-window axis order) were rewritten before any test
+   ran.
+
+### Plan changes this stage
+
+- §6.2 costs, §12 arm 2, §14.1, §14.2, §14.3, §16.1-§16.4, §17.1, Stages 3 and 4: the
+  features and the feature check run on Ruche (J0, J0g, J2, J3 in Stage 3); Stage 4 keeps
+  pilot J1 and the laptop sanity checks on the copied caches.
+
+### Suggested commits (you commit)
+
+1. "Stage 3: generic core and Nonastreda adapter":
+   - `rulfuse/core/`, `rulfuse/adapters/`, `rulfuse/audit.py`, `rulfuse/baselines.py`,
+     `rulfuse/metrics.py`, `rulfuse/cli.py`, `pyproject.toml`;
+   - the removal of `rulfuse/data/`, `rulfuse/verify.py`, `rulfuse/features/physics.py`.
+2. "Stage 3: encoders, caches and the feature check":
+   - `rulfuse/features/{encoders,cache,handcrafted,probe,check}.py`.
+3. "Stage 3 tests":
+   - `tests/` (new and ported files; `test_labels.py` and `test_segment_store.py`
+     removed).
+4. "Ruche runbook and job scripts":
+   - `slurm/`, `scripts/pack_for_ruche.ps1`, `.gitattributes`, `docs/RUCHE_RUNBOOK.md`.
+5. "Stage 3 docs and scripts":
+   - `scripts/{eda_rul,end_to_end_trace,validate_stage2}.py`, `docs/END_TO_END.md`,
+     `PROJECT_PLAN.md`, `PROJECT_LOG.md`.
+
+### Next
+
+1. You: push, then Part A of the runbook and `bash slurm/stage3.sh` (§11).
+2. Copy home the report and caches (§13); I log decision 1 (photo types kept) and the
+   force go/no-go, and update the plan if a type is excluded.
+3. Stage 4 (training engine) can start in parallel: it needs only the schema and the cache
+   layout, which are fixed.

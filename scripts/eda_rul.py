@@ -28,13 +28,30 @@ from PIL import Image  # noqa: E402
 from scipy.signal import welch  # noqa: E402
 from scipy.stats import spearmanr  # noqa: E402
 
-from rulfuse import audit, paths  # noqa: E402
+from rulfuse import paths  # noqa: E402
+from rulfuse.adapters.nonastreda.audit import gap_wear_jumps, stage_steps_by_record  # noqa: E402
+from rulfuse.adapters.nonastreda.dataset import (  # noqa: E402
+    NonastredaData as Dataset,
+)
+from rulfuse.adapters.nonastreda.dataset import (  # noqa: E402
+    NonastredaOptions as DatasetOptions,
+)
+from rulfuse.adapters.nonastreda.dataset import (  # noqa: E402
+    load_data as load_dataset,
+)
+from rulfuse.adapters.nonastreda.dataset import to_dataset, trimmed_bounds  # noqa: E402
+from rulfuse.adapters.nonastreda.failure import TTF_RULES, isotonic  # noqa: E402
+from rulfuse.adapters.nonastreda.failure import tool_failure as tool_labels  # noqa: E402
+from rulfuse.adapters.nonastreda.load import (  # noqa: E402
+    PHOTO_KINDS,
+    SAMPLE_RATE_HZ,
+    metas_by_tool,
+    photo_path,
+)
+from rulfuse.adapters.nonastreda.trim import CAUSAL_REFERENCE_SAMPLES, envelope  # noqa: E402
 from rulfuse.baselines import score_usage_baselines  # noqa: E402
-from rulfuse.data.dataset import Dataset, DatasetOptions, load_dataset, trimmed_bounds  # noqa: E402
-from rulfuse.data.folds import leave_one_tool_out_folds  # noqa: E402
-from rulfuse.data.labels import TTF_RULES, isotonic, tool_labels  # noqa: E402
-from rulfuse.data.nonastreda import PHOTO_KINDS, SAMPLE_RATE_HZ, metas_by_tool, photo_path  # noqa: E402
-from rulfuse.data.trim import CAUSAL_REFERENCE_SAMPLES, envelope  # noqa: E402
+from rulfuse.core.folds import leave_one_unit_out  # noqa: E402
+from rulfuse.core.store import SegmentStore, build_segment_store  # noqa: E402
 from rulfuse.resources import check_resources  # noqa: E402
 
 OMNIFUSER_RECORDS = (
@@ -219,9 +236,11 @@ def ttf_analysis(ds: Dataset, ds_rec: Dataset) -> dict:
     return out
 
 
-def window_analysis(ds: Dataset) -> list[dict]:
+def window_analysis(ds: Dataset, store: SegmentStore) -> list[dict]:
     rows = []
-    for tool, lab in ds.labels.items():
+    seg = store.segments
+    for tool, lab in ds.failures.items():
+        mine = (seg["unit"] == tool) & seg["is_prediction_point"].astype(bool)
         rows.append(
             {
                 "tool": tool,
@@ -234,10 +253,9 @@ def window_analysis(ds: Dataset) -> list[dict]:
                     for s in ds.timelines[tool]
                     if not s.recorded and s.position < lab.ttf_position
                 ),
-                "pre_ttf_points": len(lab.points),
-                "force_missing_points": int((~lab.points.force_present).sum()),
-                "window_points_pass": int(lab.targets.window_pass.sum()),
-                "window_points_sec": int(lab.targets.window_sec.sum()),
+                "pre_ttf_points": int(mine.sum()),
+                "force_missing_points": int((mine & ~seg["signal_present"].astype(bool)).sum()),
+                "window_points_sec": int((mine & seg["window"].astype(bool)).sum()),
             }
         )
     return rows
@@ -249,7 +267,7 @@ def force_indicators(ds: Dataset) -> tuple[list[dict], dict]:
     rows: list[dict] = []
     by_tool = metas_by_tool(ds.metas)
     for tool, slots in ds.timelines.items():
-        lab = ds.labels[tool]
+        lab = ds.failures[tool]
         smoothed = dict(
             zip(
                 [m.record_id for m in by_tool[tool]],
@@ -352,7 +370,7 @@ def photo_statistics(ds: Dataset) -> tuple[list[dict], dict]:
     rows = []
     by_tool = metas_by_tool(ds.metas)
     for tool, metas in by_tool.items():
-        lab = ds.labels[tool]
+        lab = ds.failures[tool]
         position = {s.record_id: s.position for s in ds.timelines[tool] if s.recorded}
         smoothed = isotonic([m.flank_wear for m in metas])
         for meta, wear in zip(metas, smoothed, strict=True):
@@ -464,7 +482,7 @@ def fig_wear_curves(ds: Dataset, out: Path) -> None:
         ax.scatter(x, wear, s=MARK, color=MUTED, lw=0, label="measured", zorder=2)
         ax.plot(x, isotonic(wear), color=BLUE, lw=LINE, label="isotonic smoothed", zorder=3)
         ax.axhline(110, color=MUTED, lw=0.7, ls=(0, (4, 3)), label="110 µm threshold", zorder=1)
-        ttf = ds.labels[tool].ttf_position
+        ttf = ds.failures[tool].ttf_position
         ax.axvline(ttf, color=ORANGE, lw=LINE, label="TTF (confirmed rule)", zorder=4)
         ax.text(ttf + 0.8, 18, f"TTF {ttf}", color=INK2, fontsize=7.5)
         ax.set_title(tool, loc="left")
@@ -565,31 +583,27 @@ def fig_force_vs_rul(rows: list[dict], ds: Dataset, key: str, out: Path) -> None
 
 
 def fig_baselines(rows: list[dict], out: Path) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(11, 3.4))
+    fig, ax = plt.subplots(1, 1, figsize=(6.5, 3.4))
     tools = list(dict.fromkeys(r["fold_test"] for r in rows))
-    for ax, unit, label in (
-        (axes[0], "pass", "MAE (passes)"),
-        (axes[1], "sec", "MAE (s of cutting)"),
-    ):
-        for color, name, offset in ((BLUE, "B0", -0.2), (ORANGE, "B1", 0.0), (AQUA, "B2", 0.2)):
-            values = [
-                next(
-                    r["mae"]
-                    for r in rows
-                    if r["fold_test"] == t and r["unit"] == unit and r["baseline"] == name
-                )
-                for t in tools
-            ]
-            ax.scatter(
-                np.arange(len(tools)) + offset, values, s=MARK * 1.6, color=color, lw=0, label=name
-            )
-        ax.set_xticks(range(len(tools)), tools)
-        ax.set_ylabel(label)
-        ax.set_xlabel("test tool")
-    handles, labels = axes[0].get_legend_handles_labels()
+    for color, name, offset in ((BLUE, "B0", -0.2), (ORANGE, "B1", 0.0), (AQUA, "B2", 0.2)):
+        values = [
+            next(r["mae"] for r in rows if r["fold_test"] == t and r["baseline"] == name)
+            for t in tools
+        ]
+        ax.scatter(
+            np.arange(len(tools)) + offset, values, s=MARK * 1.6, color=color, lw=0, label=name
+        )
+    ax.set_xticks(range(len(tools)), tools)
+    ax.set_ylabel("MAE (s of cutting)")
+    ax.set_xlabel("test tool")
+    handles, labels = ax.get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.06))
     fig.suptitle(
-        "Usage baselines on each test tool's k-window", x=0.01, ha="left", y=1.06, fontsize=10
+        "Usage baselines on each test tool's window (RUL <= H)",
+        x=0.01,
+        ha="left",
+        y=1.06,
+        fontsize=10,
     )
     save(fig, out)
 
@@ -627,11 +641,13 @@ def main(argv: list[str] | None = None) -> int:
 
     ds = load_dataset()
     ds_rec = load_dataset(DatasetOptions(axis="recorded"))
-    folds = list(leave_one_tool_out_folds(ds.tools))
+    folds = leave_one_unit_out(ds.tools)
+    store = SegmentStore.open(build_segment_store(to_dataset(ds)))
+    store_rec = SegmentStore.open(build_segment_store(to_dataset(ds_rec)))
     summary: dict = {"options": vars(ds.options), "tools": ds.tools}
 
     print("gaps, duplicates, trims, durations")
-    summary["gaps"] = audit.gap_wear_jumps(ds.metas)
+    summary["gaps"] = gap_wear_jumps(ds.metas)
     summary["duplicates"] = duplicate_analysis(ds)
     trim_summary, flagged = trim_analysis(ds)
     summary["trim"] = {k: v for k, v in trim_summary.items() if not k.startswith("_")}
@@ -640,10 +656,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print("TTF rules, windows, baselines")
     summary["ttf"] = ttf_analysis(ds, ds_rec)
-    summary["windows_gap"] = window_analysis(ds)
-    summary["windows_recorded"] = window_analysis(ds_rec)
-    base_gap = score_usage_baselines(ds.labels, folds)
-    base_rec = score_usage_baselines(ds_rec.labels, folds)
+    summary["windows_gap"] = window_analysis(ds, store)
+    summary["windows_recorded"] = window_analysis(ds_rec, store_rec)
+    base_gap = score_usage_baselines(store, folds)
+    base_rec = score_usage_baselines(store_rec, folds)
     summary["baselines"] = {"gap": base_gap["summary"], "recorded": base_rec["summary"]}
     write_csv(
         [{"axis": "gap", **r} for r in base_gap["rows"]]
@@ -663,7 +679,7 @@ def main(argv: list[str] | None = None) -> int:
     values: dict[str, dict[str, float]] = defaultdict(dict)
     for row in [*photo_rows, *force_rows]:
         values[row["record_id"]].update({k: row[k] for k in STEP_STATS if k in row})
-    summary["stage_steps"] = audit.stage_steps(ds.metas, values, STEP_STATS)
+    summary["stage_steps"] = stage_steps_by_record(ds.metas, values, STEP_STATS)
 
     for name in ("gaps", "durations", "windows_gap", "windows_recorded", "trim_review"):
         write_csv(summary[name], args.out / f"{name}.csv")

@@ -44,3 +44,32 @@ def spectral_features(segment: np.ndarray) -> np.ndarray:
     diff = np.diff(x, axis=0) if n > 1 else np.zeros((1, x.shape[1]))
     rms_diff = np.log10(np.sqrt(np.mean(diff**2, axis=0)) + EPS)
     return np.stack([*bands, centroid, entropy, rms_diff], axis=1).astype(np.float32)
+
+
+def mean_rms_names(channel_names: list[str]) -> tuple[str, ...]:
+    return tuple(f"{stat}_{name}" for name in channel_names for stat in ("mean", "rms"))
+
+
+def segment_mean_rms(store, signals) -> tuple[np.ndarray, np.ndarray, tuple[str, ...]]:
+    """(segment rows with a signal, (rows, 2·channels) mean and RMS of every model channel,
+    names). Diagnostics only (the Stage-2 shift and identifiability checks); computed once
+    per distinct segment, at the source rate."""
+    from rulfuse.core.channels import expand, model_channels
+
+    seg, channels = store.segments, store.channels
+    names = mean_rms_names([c.name for c in model_channels(channels)])
+    rows = np.flatnonzero(seg["signal_present"].astype(bool))
+    out = np.empty((len(rows), len(names)))
+    done: dict[int, np.ndarray] = {}
+    source, array = None, np.empty((0, len(channels)))
+    for i, row in enumerate(rows):
+        d = int(seg["distinct_segment"][row])
+        if d not in done:
+            if seg["source"][row] != source:
+                source = seg["source"][row]
+                array = np.asarray(signals.read(str(source)))
+            start, end = int(seg["start_sample"][row]), int(seg["end_sample"][row])
+            x = expand(array[start:end], channels).astype(np.float64)
+            done[d] = np.stack([x.mean(axis=0), np.sqrt(np.mean(x**2, axis=0))], 1).reshape(-1)
+        out[i] = done[d]
+    return rows, out, names

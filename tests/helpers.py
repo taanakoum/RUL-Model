@@ -6,7 +6,7 @@ import csv
 from collections.abc import Iterable
 from pathlib import Path
 
-from rulfuse.data.nonastreda import PassMeta
+from rulfuse.adapters.nonastreda.load import PassMeta
 
 
 def meta(
@@ -76,14 +76,16 @@ STAGE = {"sharp": "1", "used": "2", "dulled": "3"}
 
 
 def synthetic_dataset_files(root: Path) -> tuple[Path, Path]:
-    """Raw label files and a force store for 3 small tools.
+    """Raw label files, small photos and a force store for 3 small tools.
 
     Passes are 0.8 s idle, 23-25 s of cutting, 0.8 s idle (so the trim removes the idle
-    ends and leaves 2 or 3 segments). T1R2B4 is a bit-identical copy of T1R2B3.
+    ends and leaves 2 or 3 segments). T1R2B4 is a bit-identical copy of T1R2B3. Each pass
+    has a 40 × 60 tool, chip and workpiece photo whose brightness rises with wear.
     """
     import numpy as np
+    from PIL import Image
 
-    from rulfuse.data.force_store import write_force_store
+    from rulfuse.adapters.nonastreda.force_store import write_force_store
 
     raw, store = root / "raw", root / "forces"
     rng = np.random.default_rng(0)
@@ -99,6 +101,11 @@ def synthetic_dataset_files(root: Path) -> tuple[Path, Path]:
             force[800 : 800 + cut, 0] = 100 + 2 * index + rng.normal(0, 2, cut)
             force[800 : 800 + cut, 2] = -10 - 0.01 * np.arange(cut) / 100  # a little drift
             forces[record_id] = force
+            for kind, ext in (("tool", ".jpg"), ("chip", ".jpg"), ("work", ".png")):
+                (raw / kind).mkdir(parents=True, exist_ok=True)
+                grey = np.full((40, 60, 3), min(250, 60 + 6 * index), np.uint8)
+                grey[::7] = 20  # some texture
+                Image.fromarray(grey).save(raw / kind / f"{record_id}{ext}")
     forces["T1R2B4"] = forces["T1R2B3"].copy()
     write_label_csvs(raw, rows)
     write_force_store(

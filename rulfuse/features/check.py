@@ -31,7 +31,13 @@ from rulfuse.core.folds import leave_one_unit_out
 from rulfuse.core.normalization import PCA, Scaler
 from rulfuse.core.schema import SignalSource
 from rulfuse.core.store import SegmentStore
-from rulfuse.features.cache import ImageFeatures, SignalFeatures, _segment_inputs, distinct_rows, windows
+from rulfuse.features.cache import (
+    ImageFeatures,
+    SignalFeatures,
+    _segment_inputs,
+    distinct_rows,
+    windows,
+)
 from rulfuse.features.probe import cross_fitted_readout, probe_folds
 
 SHUFFLE_SEED = 0
@@ -47,7 +53,9 @@ def recording_signal_features(
     ``encoder`` (channels × 2·dim), ``descriptors`` (channels × 7)."""
     rec, seg = store.recordings, store.segments
     rows = np.flatnonzero(rec["signal_present"].astype(bool))
-    key_to_row = {(str(u), int(i)): r for r, (u, i) in enumerate(zip(rec["unit"], rec["index"], strict=True))}
+    key_to_row = {
+        (str(u), int(i)): r for r, (u, i) in enumerate(zip(rec["unit"], rec["index"], strict=True))
+    }
     sums: dict[int, list[np.ndarray]] = {}
     for s in np.flatnonzero(seg["distinct_segment"] >= 0):
         r = key_to_row[(str(seg["unit"][s]), int(seg["recording"][s]))]
@@ -55,13 +63,15 @@ def recording_signal_features(
     enc = np.empty((len(rows), int(np.prod(features.embeddings.shape[1:]))), dtype=np.float32)
     desc = np.empty((len(rows), int(np.prod(features.descriptors.shape[1:]))), dtype=np.float32)
     for i, r in enumerate(rows):
-        ids = np.asarray(sums[r], dtype=np.int64)
+        ids = np.asarray(sums[int(r)], dtype=np.int64)
         enc[i] = np.asarray(features.embeddings[ids], dtype=np.float32).mean(axis=0).reshape(-1)
         desc[i] = np.asarray(features.descriptors[ids], dtype=np.float32).mean(axis=0).reshape(-1)
     return rows, {"encoder": enc, "descriptors": desc}
 
 
-def image_vectors(store: SegmentStore, features: ImageFeatures, kind: str) -> tuple[np.ndarray, np.ndarray]:
+def image_vectors(
+    store: SegmentStore, features: ImageFeatures, kind: str
+) -> tuple[np.ndarray, np.ndarray]:
     """(image rows of ``kind``, CLS ⊕ mean of the grid tokens) per image."""
     rows = store.image_rows(kind=kind)
     tokens = np.asarray(features.tokens[rows], dtype=np.float32)
@@ -70,8 +80,15 @@ def image_vectors(store: SegmentStore, features: ImageFeatures, kind: str) -> tu
 
 def _recording_of_images(store: SegmentStore, image_rows: np.ndarray) -> np.ndarray:
     rec = store.recordings
-    index = {(str(u), str(k)): r for r, (u, k) in enumerate(zip(rec["unit"], rec["key"], strict=True))}
-    return np.array([index.get((str(store.images["unit"][r]), str(store.images["key"][r])), -1) for r in image_rows])
+    index = {
+        (str(u), str(k)): r for r, (u, k) in enumerate(zip(rec["unit"], rec["key"], strict=True))
+    }
+    return np.array(
+        [
+            index.get((str(store.images["unit"][r]), str(store.images["key"][r])), -1)
+            for r in image_rows
+        ]
+    )
 
 
 # ----------------------------------------------------------------------------- pieces
@@ -94,9 +111,15 @@ def _leakage(store: SegmentStore, rec_rows: np.ndarray, x: np.ndarray, readout: 
     pcs = loo_pcs(x, units)
     values = {f"pc{i + 1}": pcs[:, i] for i in range(pcs.shape[1])}
     values["hi_readout"] = readout
-    result = stage_steps(units, rec["group"][rec_rows].astype(str), rec["stage"][rec_rows].astype(int), values)
+    result = stage_steps(
+        units, rec["group"][rec_rows].astype(str), rec["stage"][rec_rows].astype(int), values
+    )
     worst = max(v["largest_at_stage_boundary"] for v in result.values())
-    return {"statistics": result, "worst_units_at_stage_boundary": worst, "leaks": worst > LEAK_MAX_UNITS}
+    return {
+        "statistics": result,
+        "worst_units_at_stage_boundary": worst,
+        "leaks": worst > LEAK_MAX_UNITS,
+    }
 
 
 def _readout_summary(y: np.ndarray, readout: np.ndarray, units: np.ndarray) -> dict:
@@ -144,20 +167,35 @@ def scale_check(
 
 
 def determinism_check(
-    store: SegmentStore, signals: SignalSource, encoder, features: SignalFeatures, n: int = 16, seed: int = 1
+    store: SegmentStore,
+    signals: SignalSource,
+    encoder,
+    features: SignalFeatures,
+    n: int = 16,
+    seed: int = 1,
 ) -> dict:
-    """Re-encode ``n`` cached segments; the largest absolute difference to the cache."""
+    """Re-encode ``n`` cached segments one at a time (other batch sizes than the cache's).
+    On a GPU, batch-dependent kernels (and TF32 convolutions) change the last digits, so the
+    tolerance is relative: the largest difference over the largest cached magnitude."""
     rng = np.random.default_rng(seed)
     first = distinct_rows(store)
     picks = rng.choice(len(first), size=min(n, len(first)), replace=False)
-    worst, cache = 0.0, {}
+    worst, scale, cache = 0.0, 0.0, {}
     for d in picks:
         segment, _ = _segment_inputs(store, signals, int(first[d]), cache)
         w = windows(segment, encoder.length)
         e = encoder.encode(w.reshape(-1, encoder.length)).reshape(w.shape[0], w.shape[1], -1)
         pooled = np.concatenate([e.mean(axis=1), e.std(axis=1)], axis=1)
-        worst = max(worst, float(np.max(np.abs(pooled - features.embeddings[d]))))
-    return {"segments": int(len(picks)), "max_abs_difference": worst, "ok": worst < 1e-3}
+        cached = np.asarray(features.embeddings[d], dtype=np.float64)
+        worst = max(worst, float(np.max(np.abs(pooled - cached))))
+        scale = max(scale, float(np.max(np.abs(cached))))
+    relative = worst / max(scale, 1e-12)
+    return {
+        "segments": int(len(picks)),
+        "max_abs_difference": worst,
+        "max_relative_difference": relative,
+        "ok": relative < 1e-3,
+    }
 
 
 # ----------------------------------------------------------------------------- report
@@ -179,14 +217,20 @@ def feature_check(
         "hi": store.settings.hi_name,
         "signal_features": str(signal_features.folder),
         "image_features": str(image_features.folder) if image_features else None,
-        "leak_rule": f"a stage boundary is the largest group step in more than {LEAK_MAX_UNITS} units",
+        "leak_rule": (
+            f"a stage boundary is the largest group step in more than {LEAK_MAX_UNITS} units"
+        ),
         **(extra or {}),
     }
     rows, pooled = recording_signal_features(store, signal_features)
     units = rec["unit"][rows].astype(str)
     y = hi[rows]
     both = np.concatenate([pooled["encoder"], pooled["descriptors"]], axis=1)
-    sets = {"encoder+descriptors": both, "encoder": pooled["encoder"], "descriptors": pooled["descriptors"]}
+    sets = {
+        "encoder+descriptors": both,
+        "encoder": pooled["encoder"],
+        "descriptors": pooled["descriptors"],
+    }
     signal = {name: probe_folds(x, y, units, folds) for name, x in sets.items()}
     signal["encoder+descriptors"]["shuffled_control"] = probe_folds(
         both, y, units, folds, shuffle_seed=SHUFFLE_SEED
@@ -195,7 +239,9 @@ def feature_check(
     channels = [c.name for c in model_channels(store.channels)]
     rms = pooled["descriptors"].reshape(len(rows), len(channels), len(DESCRIPTOR_NAMES))[:, :, 0]
     level = {
-        f"spearman_log10_rms_{name}_vs_hi": round(float(spearmanr(rms[:, c], y, nan_policy="omit")[0]), 3)
+        f"spearman_log10_rms_{name}_vs_hi": round(
+            float(np.asarray(spearmanr(rms[:, c], y, nan_policy="omit")[0])), 3
+        )
         for c, name in enumerate(channels)
     }
     report["signals"] = {

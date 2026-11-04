@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rulfuse.data.segments import segment_ends, segment_sample_bounds
+from rulfuse.core.segments import segment_ends, segment_sample_bounds, subwindow_starts
 
 
 @pytest.mark.parametrize(
@@ -32,7 +32,7 @@ def test_segment_ends_rejects_bad_input():
 
 def test_sample_bounds_tile_the_pass():
     for samples in (8000, 14900, 97123, 100000):
-        bounds = segment_sample_bounds(samples)
+        bounds = segment_sample_bounds(samples, 1000.0)
         assert bounds[0][0] == 0 and bounds[-1][1] == samples
         assert all(a[1] == b[0] for a, b in zip(bounds, bounds[1:], strict=False))
         # Every boundary but the last is a whole multiple of 10 s: it depends only on the
@@ -40,9 +40,22 @@ def test_sample_bounds_tile_the_pass():
         assert all(stop % 10000 == 0 for _, stop in bounds[:-1])
 
 
+def test_subwindows_cover_every_sample():
+    for samples in (512, 513, 10000, 14321):
+        starts = subwindow_starts(samples, 512)
+        covered = np.zeros(samples, dtype=bool)
+        for a in starts:
+            covered[a : a + 512] = True
+        assert covered.all() and starts[-1] + 512 == samples and starts[0] == 0
+    assert len(subwindow_starts(10000, 512)) == 20  # a 10 s segment at 1 kHz (§6.2)
+    assert subwindow_starts(300, 512).tolist() == [0]  # shorter: one window, padded later
+
+
 @pytest.mark.data
-def test_real_point_counts(dataset):
-    counts = {tool: len(labels.points) for tool, labels in dataset.labels.items()}
+def test_real_point_counts(real_store):
+    seg = real_store.segments
+    point = seg["is_prediction_point"].astype(bool)
+    counts = {u: int((point & (seg["unit"] == u)).sum()) for u in real_store.unit_names}
     assert counts == {
         "T1": 308,
         "T2": 393,

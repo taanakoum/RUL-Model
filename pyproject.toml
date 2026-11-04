@@ -19,8 +19,16 @@ test = ["pytest>=8.0"]
 eda = ["matplotlib>=3.8"]
 dev = ["ruff>=0.6", "pyright>=1.1.380"]
 hub = ["huggingface_hub>=0.24"]
-# Stage 3 adds an "encoders" extra: torch, transformers, peft, momentfm, mantis-tsfm,
-# chronos-forecasting (PROJECT_PLAN.md §16.2).
+# The frozen encoders (PROJECT_PLAN.md D16). Install torch first, from the right index:
+# CPU on the laptop (https://download.pytorch.org/whl/cpu), CUDA 12.6 on Ruche
+# (https://download.pytorch.org/whl/cu126; docs/RUCHE_RUNBOOK.md §7).
+encoders = [
+    "torch>=2.4",
+    "transformers>=4.51",
+    "mantis-tsfm>=1.1",
+    "huggingface_hub>=0.24",
+    "safetensors>=0.4",
+]
 
 [project.scripts]
 rulfuse = "rulfuse.cli:main"
@@ -33,6 +41,7 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "data: needs the real Nonastreda data under RULFUSE_DATA_ROOT (skipped when absent)",
+    "weights: loads a real pretrained checkpoint from the Hugging Face cache (skipped when absent)",
 ]
 
 [tool.ruff]

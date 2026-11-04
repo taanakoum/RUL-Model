@@ -1,7 +1,8 @@
 """Trace one prediction point through the data pipeline, for docs/END_TO_END.md.
 
 The point is the plan's worked example (PROJECT_PLAN.md §3.2): tool T5, pass 10, segment 5.
-Every number of the document's walk-through comes from here.
+Every number of the document's walk-through comes from here. It reads the generic store
+built through the Nonastreda adapter.
 
     D:\\RULModel\\.venv\\Scripts\\python.exe scripts/end_to_end_trace.py
 """
@@ -13,88 +14,90 @@ import json
 import numpy as np
 
 from rulfuse import paths
-from rulfuse.data.channels import derived_channels, fz_offset
-from rulfuse.data.dataset import load_dataset, trimmed_bounds
-from rulfuse.data.normalization import relative_to_baseline
-from rulfuse.data.segment_store import SegmentStore, build_segment_store, photo_visible
-from rulfuse.features.physics import STAT_NAMES, channel_stats, segment_stats
+from rulfuse.adapters.nonastreda import load_data, to_dataset
+from rulfuse.adapters.nonastreda.dataset import trimmed_bounds
+from rulfuse.core.channels import DESCRIPTOR_NAMES, descriptors, expand, head_mean, model_channels
+from rulfuse.core.normalization import relative_to_baseline
+from rulfuse.core.store import SegmentStore, build_segment_store, image_visible
+from rulfuse.features.handcrafted import segment_mean_rms
 
 TOOL, POSITION, SEGMENT = "T5", 10, 5
 
 
 def main() -> int:
-    ds = load_dataset()
+    data = load_data()
+    ds = to_dataset(data)
     store = SegmentStore.open(build_segment_store(ds))
-    seg, passes = store.segments, store.passes
-    row = int(
-        np.flatnonzero(
-            (seg["tool"] == TOOL) & (seg["position"] == POSITION) & (seg["segment"] == SEGMENT)
-        )[0]
-    )
-    prow = int(np.flatnonzero((passes["tool"] == TOOL) & (passes["position"] == POSITION))[0])
-    record = str(seg["record_id"][row])
-    rep = str(seg["representative"][row]) or record
-    raw = ds.store.force(rep)
-    omni = trimmed_bounds(ds.store, "omnifuser")[record]
+    seg, rec, img = store.segments, store.recordings, store.images
+    record = next(r.key for r in ds.unit(TOOL).recordings if r.attrs["position"] == POSITION)
+    here_rows = (seg["unit"] == TOOL) & (seg["recording_key"] == record)
+    row = int(np.flatnonzero(here_rows & (seg["segment"] == SEGMENT))[0])
+    rrow = int(np.flatnonzero((rec["unit"] == TOOL) & (rec["key"] == record))[0])
+    raw = data.store.force(str(seg["source"][row]))
+    omni = trimmed_bounds(data.store, "omnifuser")[record]
     start, end = int(seg["start_sample"][row]), int(seg["end_sample"][row])
-    trim_start = int(passes["trim_start"][prow])
-    offset = fz_offset(raw[trim_start:])
-    stats = channel_stats(derived_channels(raw[start:end], offset))
+    trim_start = int(rec["start_sample"][rrow])
+    head = head_mean(expand(raw[trim_start:], ds.channels), 1000.0)
+    level = descriptors(expand(raw[start:end], ds.channels), 1000.0, head)
+    names = [c.name for c in model_channels(ds.channels)]
 
-    rows, features = segment_stats(store, ds.store)
-    tool_rows = rows[seg["tool"][rows] == TOOL]
-    mask = seg["tool"][rows] == TOOL
+    rows, features, stat_names = segment_mean_rms(store, ds.signals)
+    mask = seg["unit"][rows] == TOOL
     relative = relative_to_baseline(features[mask], seg["in_baseline"][rows][mask])
-    here = int(np.flatnonzero(tool_rows == row)[0])
+    here = int(np.flatnonzero(rows[mask] == row)[0])
 
-    tool_passes = np.flatnonzero(passes["tool"] == TOOL)
+    tool_photos = store.image_rows(TOOL, "tool")
     visible = [
-        int(passes["position"][i])
-        for i in tool_passes
-        if passes["recorded"][i] and photo_visible(POSITION, int(passes["photo_position"][i]))
+        str(img["key"][i])
+        for i in tool_photos
+        if image_visible(img["available_s"][i], seg["tau_s"][row])
     ]
     trace = {
         "store_signature": store.signature,
-        "point": {"tool": TOOL, "position": POSITION, "segment": SEGMENT, "record_id": record},
+        "point": {"unit": TOOL, "pass": POSITION, "segment": SEGMENT, "record_id": record},
         "raw": {"samples": int(len(raw)), "seconds": len(raw) / 1000},
         "trim": {
-            "causal": [trim_start, int(passes["trim_end"][prow])],
+            "causal": [trim_start, int(rec["end_sample"][rrow])],
             "omnifuser": list(omni),
-            "duration_s": float(passes["duration_s"][prow]),
+            "duration_s": float(rec["duration_s"][rrow]),
         },
-        "segments_in_pass": int(np.sum((seg["tool"] == TOOL) & (seg["position"] == POSITION))),
+        "segments_in_recording": int(here_rows.sum()),
         "segment_samples": [start, end],
         "times": {
-            "elapsed_in_pass_s": float(seg["elapsed_in_pass_s"][row]),
-            "completed_passes": float(seg["completed_passes"][row]),
+            "recording_start_s": float(rec["start_s"][rrow]),
+            "elapsed_s": float(seg["elapsed_s"][row]),
             "tau_s": float(seg["tau_s"][row]),
-            "t_label": float(seg["t_label"][row]),
-            "mean_past_duration_s": float(seg["mean_past_duration_s"][row]),
         },
-        "ttf": store.tools[TOOL],
-        "targets": {k: float(seg[k][row]) for k in ("rul_pass", "rul_sec", "y_pass", "y_sec")}
-        | {k: bool(seg[k][row]) for k in ("window_pass", "window_sec", "is_prediction_point")},
-        "force": {
-            "force_present": bool(seg["force_present"][row]),
+        "failure": store.units[TOOL],
+        "targets": {k: float(seg[k][row]) for k in ("rul_s", "y_s")}
+        | {k: bool(seg[k][row]) for k in ("window", "is_prediction_point")},
+        "signal": {
+            "signal_present": bool(seg["signal_present"][row]),
             "distinct_segment": int(seg["distinct_segment"][row]),
-            "fz_offset": round(offset, 3),
-            "absolute": dict(zip(STAT_NAMES, np.round(stats, 3).tolist(), strict=True)),
-            "relative_to_baseline": dict(
-                zip(STAT_NAMES, np.round(relative[here], 3).tolist(), strict=True)
+            "level_descriptors": {
+                name: dict(zip(DESCRIPTOR_NAMES, np.round(level[c], 4).tolist(), strict=True))
+                for c, name in enumerate(names)
+            },
+            "mean_rms": dict(
+                zip(stat_names, np.round(features[mask][here], 3).tolist(), strict=True)
+            ),
+            "mean_rms_relative_to_baseline": dict(
+                zip(stat_names, np.round(relative[here], 3).tolist(), strict=True)
             ),
         },
-        "photos_visible_from_passes": visible,
-        "pass_labels": {
-            "image_label": str(passes["image_label"][prow]),
-            "flank_wear_um": float(passes["flank_wear_um"][prow]),
-            "wear_smoothed_um": round(float(passes["wear_smoothed_um"][prow]), 2),
-            "wear_causal_um": round(float(passes["wear_causal_um"][prow]), 2),
+        "tool_photos_visible": {"count": len(visible), "last": visible[-1] if visible else None},
+        "recording": {
+            "hi_um": round(float(rec["hi"][rrow]), 2),
+            "hi_causal_um": round(float(rec["hi_causal"][rrow]), 2),
+            "stage": int(rec["stage"][rrow]),
+            "image_label": str(rec["attr_image_label"][rrow]),
+            "flank_wear_um": float(rec["attr_flank_wear_um"][rrow]),
         },
     }
-    out = paths.runs_dir() / "stage2" / "trace.json"
+    out = paths.runs_dir() / "stage3" / "trace.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(trace, indent=1), encoding="utf-8")
-    print(json.dumps(trace, indent=1))
+    out.write_text(json.dumps(trace, indent=1, default=str), encoding="utf-8")
+    print(json.dumps(trace, indent=1, default=str))
     return 0
 
 

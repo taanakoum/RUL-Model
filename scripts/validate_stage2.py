@@ -20,13 +20,15 @@ import time
 import numpy as np
 
 from rulfuse import audit, paths
-from rulfuse.data.dataset import load_dataset
-from rulfuse.data.folds import leave_one_tool_out_folds
-from rulfuse.data.images import prepared_pixels
-from rulfuse.data.nonastreda import photo_path
-from rulfuse.data.normalization import relative_to_baseline, tool_shift
-from rulfuse.data.segment_store import SegmentStore, build_segment_store
-from rulfuse.features.physics import STAT_NAMES, segment_stats
+from rulfuse.adapters.nonastreda import load_data, to_dataset
+from rulfuse.adapters.nonastreda.audit import stage_steps_by_record
+from rulfuse.adapters.nonastreda.images import PHOTO_SPECS
+from rulfuse.adapters.nonastreda.load import photo_path
+from rulfuse.core.folds import leave_one_unit_out
+from rulfuse.core.images import prepared_pixels
+from rulfuse.core.normalization import relative_to_baseline, unit_shift
+from rulfuse.core.store import SegmentStore, build_segment_store
+from rulfuse.features.handcrafted import segment_mean_rms
 from rulfuse.resources import check_resources
 
 
@@ -39,30 +41,31 @@ def edge_strength(pixels: np.ndarray) -> float:
 def main() -> int:
     print("resources:", check_resources(min_memory_mb=800).describe())
     started = time.time()
-    ds = load_dataset()
-    store = SegmentStore.open(build_segment_store(ds))
+    ds = load_data()
+    core = to_dataset(ds)
+    store = SegmentStore.open(build_segment_store(core))
     print(f"segment store {store.signature}")
 
-    rows, absolute = segment_stats(store, ds.store)
-    tools = store.segments["tool"][rows]
+    rows, absolute, stat_names = segment_mean_rms(store, core.signals)
+    tools = store.segments["unit"][rows]
     in_base = store.segments["in_baseline"][rows]
     relative = np.empty_like(absolute)
     for tool in ds.tools:
         mask = tools == tool
         relative[mask] = relative_to_baseline(absolute[mask], in_base[mask])
 
-    folds = list(leave_one_tool_out_folds(ds.tools))
+    folds = leave_one_unit_out(ds.tools)
     shift_rows = []
     for fold in folds:
         row: dict[str, float | str] = {"test": fold.test}
         for name, x in (("absolute", absolute), ("relative", relative)):
-            z = tool_shift(x, tools, fold)
+            z = unit_shift(x, tools, fold)
             row[f"{name}_median_abs"] = round(float(np.median(np.abs(z))), 3)
             row[f"{name}_max_abs"] = round(float(np.max(np.abs(z))), 3)
-            row[f"{name}_mean_Fx"] = round(float(z[STAT_NAMES.index("mean_Fx")]), 3)
+            row[f"{name}_mean_Fx"] = round(float(z[stat_names.index("mean_Fx")]), 3)
         shift_rows.append(row)
     shift = {
-        "features": list(STAT_NAMES),
+        "features": list(stat_names),
         "segments": len(rows),
         "per_fold": shift_rows,
         "median_over_folds_absolute": float(
@@ -78,7 +81,7 @@ def main() -> int:
 
     # Tool identifiability: nearest tool centroid, centroids from odd passes, scored on even
     # passes (chance 0.10). Relative tokens should make tools harder to tell apart.
-    positions = store.segments["position"][rows]
+    positions = store.segments["recording"][rows]
     identify = {}
     for name, x in (("absolute", absolute), ("relative", relative)):
         z = (x - x.mean(axis=0)) / x.std(axis=0)
@@ -93,7 +96,7 @@ def main() -> int:
     values: dict[str, dict[str, float]] = {}
     for meta in ds.metas:
         path = photo_path(ds.raw, meta.record_id, "work")
-        standardized = prepared_pixels(path, "work")
+        standardized = prepared_pixels(path, PHOTO_SPECS["work"])
         grey = standardized @ np.array([0.299, 0.587, 0.114])
         values[meta.record_id] = {
             "raw_luminance": audit.mean_luminance(path),
@@ -101,7 +104,7 @@ def main() -> int:
             "standardized_luminance_sd": float(grey.std()),
             "standardized_edge_strength": edge_strength(standardized),
         }
-    steps = audit.stage_steps(ds.metas, values, list(next(iter(values.values()))))
+    steps = stage_steps_by_record(ds.metas, values, list(next(iter(values.values()))))
 
     result = {
         "segment_store": store.signature,
@@ -127,9 +130,9 @@ def main() -> int:
     print(f"tool identification accuracy (chance 0.10): {identify}")
     for name, step in steps.items():
         print(
-            f"workpiece {name:28s} 1to2 largest {step['largest_at_1to2']:2d}/10 "
-            f"share {step['share_1to2']}  | 2to3 {step['largest_at_2to3']:2d}/10 "
-            f"share {step['share_2to3']}"
+            f"workpiece {name:28s} largest at a stage boundary "
+            f"{step['largest_at_stage_boundary']:2d}/10 {step['largest_by_transition']} "
+            f"share {step['median_share']}"
         )
     print(f"wrote {out} in {result['runtime_s']} s")
     return 0

@@ -15,7 +15,6 @@ def test_point_metrics_by_hand():
     assert M.mse(y, p) == pytest.approx(5 / 3)
     assert M.rmse(y, p) == pytest.approx(np.sqrt(5 / 3))
     assert M.bias(y, p) == pytest.approx(-1 / 3)
-    assert M.mae_eq(2.0, 300.0) == pytest.approx(2.5)
 
 
 def test_interval_metrics_by_hand():

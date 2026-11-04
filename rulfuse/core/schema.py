@@ -226,7 +226,9 @@ def validate(ds: Dataset, check_signals: bool = False) -> None:
         for source, needed in sources.items():
             array = np.asarray(ds.signals.read(source))
             if array.ndim != 2 or array.shape[1] != len(ds.channels):
-                problems.append(f"signal {source}: shape {array.shape}, need (n, {len(ds.channels)})")
+                problems.append(
+                    f"signal {source}: shape {array.shape}, need (n, {len(ds.channels)})"
+                )
             elif len(array) < needed:
                 problems.append(f"signal {source}: {len(array)} samples, references need {needed}")
             elif not np.isfinite(array).all():

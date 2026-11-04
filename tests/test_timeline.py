@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from helpers import meta
 
-from rulfuse.data.timeline import DEFAULT_PASS_SECONDS, build_tool_timeline, run_gaps
+from rulfuse.adapters.nonastreda.timeline import DEFAULT_PASS_SECONDS, build_tool_timeline, run_gaps
 
 
 def tool_with_gaps():
@@ -81,9 +81,9 @@ def test_rejects_mixed_tools_and_bad_options():
 
 
 @pytest.mark.data
-def test_real_timelines(dataset):
+def test_real_timelines(data):
     unrecorded = {
-        tool: sum(not s.recorded for s in slots) for tool, slots in dataset.timelines.items()
+        tool: sum(not s.recorded for s in slots) for tool, slots in data.timelines.items()
     }
     assert unrecorded == {
         "T1": 0,
@@ -98,10 +98,7 @@ def test_real_timelines(dataset):
         "T10": 0,
     }
     missing = [
-        s
-        for slots in dataset.timelines.values()
-        for s in slots
-        if s.recorded and not s.force_present
+        s for slots in data.timelines.values() for s in slots if s.recorded and not s.force_present
     ]
     assert len(missing) == 134
     assert Counter(s.block for s in missing)[3] >= 127
