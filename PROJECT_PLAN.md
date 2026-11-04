@@ -50,39 +50,43 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 |---|---|---|---|
 | D1 | Validation protocol | 10-fold leave-one-tool-out, as in OmniFuser. Fold *i*: test T*i*, validation T*i+1* (cyclic; T1 after T10), training on the other 8 tools | You |
 | D2 | Time to failure (TTF) | **Confirmed first dulled**: the first recorded pass labelled `dulled` that is followed by at least 2 more `dulled` passes among its next 3 recorded passes | You |
-| D3 | Horizon | **k = 15 passes**; in seconds, 1,500 s of cutting (D6). Headline metrics use the points with RUL ≤ k. Training uses every pre-TTF point, with its target capped at k | You (seconds window derived) |
-| D4 | Modalities | Force with **all three channels** Fx, Fy, Fz at 1 kHz, plus two derived channels (§5.4); tool photo; chip photo; workpiece photo. Workpiece photos are standardized per image and every photo type must pass the Gate-1 stage-step leakage probe (§6.2; `docs/EDA_RUL.md` §6) | You; leakage probe from Stage 1 |
+| D3 | Horizon | **H = 1,500 s of cutting** (25 min, about 15 median passes). Headline metrics use the points with RUL ≤ H. Training uses every pre-TTF point, with its target capped at H. H is a dataset setting (§6.11) | You (your k = 15 passes, expressed in seconds since 2026-11-04) |
+| D4 | Modalities | Force with **all three channels** Fx, Fy, Fz at 1 kHz, plus the magnitude \|F\| (§5.4); tool photo; chip photo; workpiece photo. Workpiece photos are standardized per image and every photo type must pass the Stage-3 stage-step leakage probe (§6.2; `docs/EDA_RUL.md` §6) | You; leakage probe from Stage 1 |
 | D5 | Timeline | 6 weeks, to 2026-12-16. Design freeze on 2026-12-01 (D15) | You |
-| D6 | Output units | **Both, at every segment:** RUL in seconds of cutting and in passes, each with its own interval, from two heads on one shared backbone. Cutting time is spindle-engaged time. The idle time between passes is not recorded, so wall-clock time to failure cannot be predicted | You |
-| D7 | Segment | 10 s of raw 1 kHz force, from the (causally trimmed) pass start. A remainder shorter than 5 s joins the previous segment | Default; §12 tests 5 s and 20 s |
+| D6 | Output | **RUL in seconds of operation only, at every segment,** with its interval. Passes are a Nonastreda concept that other datasets lack (your instruction of 2026-11-04). Here operation means spindle-engaged cutting time; idle time between passes is not recorded, so wall-clock time cannot be predicted | You |
+| D7 | Segment | 10 s of raw signal from the (causally trimmed) start of each recording. A remainder shorter than 5 s joins the previous segment; a recording shorter than 10 s is one segment | Default; §12 tests 5 s and 20 s |
 | D8 | Duplicated force | A duplicated recording (§2.4) is attached to the **latest** pass of its group; the earlier members have missing force. This affects 134 of the 512 passes (26 %), almost always block 3 | Default (causally safe) |
-| D9 | Photo availability | A photo of pass *p* is input only to predictions made after pass *p* ends | Default; removes OmniFuser's lag-0 leakage |
+| D9 | Observation availability | An observation (here a photo) taken after recording r is input only to predictions made after r ends | Default; removes OmniFuser's lag-0 leakage |
 | D10 | Loss | MSE on the predicted mean (your request), plus a likelihood term for the spread with the mean detached, plus auxiliary wear and consistency terms (§6.7) | Default |
-| D11 | Sign | RUL = t_TTF − t ≥ 0 | Convention |
+| D11 | Sign | RUL = τ* − τ ≥ 0, with τ* the failure time in seconds of operation | Convention |
 | D12 | Time axis | **Gap-aware.** Positions follow (run, block). Runs missing *between* a tool's first and last recorded run count as unrecorded cutting, at the median duration of the tool's recorded passes before the gap: T2 run 10 (4 passes), T4 runs 6-9 (16 passes). T1's missing *leading* run 1 is not counted | Review (§2.5); supported by the Stage-1 wear-jump test (`docs/EDA_RUL.md` §2); **confirmed by you (2026-11-04)** |
 | D13 | Fusion | **Two candidates: F1 token fusion and F0 late fusion (generalized product of experts).** The others are documented as alternatives (§6.5) | You |
 | D14 | Causal inputs | Every input at a prediction point is computable from data recorded up to that point. This covers trimming, segmentation and the time features | Review |
 | D15 | Test-score policy | No test-tool score is read before the design freeze (end of Stage 6, 2026-12-01). After the freeze nothing about the model changes; the headline, importance and sensitivity results are read from then on | Review |
+| D16 | Encoders | **One fixed encoder per modality, no screening:** Mantis-8M for every force channel, DINOv2-B/14 for every photo type, both frozen (§6.2). Alternatives are documented, not run | You (2026-11-04) |
+| D17 | Built to transfer | No PCA and no dataset-specific physics features inside the model. Frozen embeddings enter through a LayerNorm and a learned, shared low-rank projection. Channels are a set with descriptor embeddings. Only generic level descriptors complement the encoder (§6.2, §6.10) | You (2026-11-04): a versatile backbone |
+| D18 | Core and adapter | Everything dataset-specific lives in one **adapter** that turns a dataset into generic units, recordings and observations with a failure time per unit. The **core** (segments, targets, features, tokens, model, training, calibration, evaluation) never refers to passes, runs, blocks, named photo types or flank wear (§6.11) | You (2026-11-04) |
+| D19 | Seeds | **3 seeds everywhere:** gate decisions and the final model are 3-seed ensembles | You (2026-11-04) |
 
 ---
 
 ## 1. Goal and success criteria
 
-**Goal.** At the end of every 10 s force segment, predict how long the tool
-has left before it is (confirmed) dulled. The prediction comes in **seconds of
-cutting** and in **passes**. The model reads everything recorded so far:
-every past force segment and every photo already taken. It outputs a
-calibrated interval as well as a point value, in each unit. The project also
-measures how much each modality and each force channel contributes.
+**Goal.** At the end of every 10 s force segment, predict how many **seconds of
+cutting** the tool has left before it is (confirmed) dulled. The model reads
+everything recorded so far: every past force segment and every photo already
+taken. It outputs a calibrated interval as well as a point value. The project
+also measures how much each modality and each force channel contributes. The
+core architecture stays free of anything specific to Nonastreda (D18).
 
 **Success criteria.** These are fixed in advance and measured on the test
-tools with the 5-seed ensemble of the frozen design.
+tools with the 3-seed ensemble of the frozen design.
 
 | # | Criterion | Threshold |
 |---|---|---|
-| S1 | Accuracy | k-window MAE below the best *deployable* baseline B2 in both units: **3.82 passes and 468 s** (§2.7). One-sided paired Wilcoxon test over the 10 test tools, Holm-adjusted over the 2 units, adjusted p < 0.05. With 10 tools this needs about 8 or more tools improved, with small losses on the rest. The window-aware constant B0 (4.13 passes, 412 s) is reported alongside |
-| S2 | Intervals | Pooled coverage of the nominal 90 % interval within [0.85, 0.95] in both units; per-tool coverage reported. Winkler interval score below B2's empirical intervals (§8) |
-| S3 | Modality importance | Shapley values for force, tool, chip and workpiece, with 95 % bootstrap intervals over tools. The sign of the most important modality is resolved |
+| S1 | Accuracy | Window MAE below the best *deployable* baseline B2: **468 s** (§2.7). One-sided paired Wilcoxon test over the 10 test tools, p < 0.05. With 10 tools this needs about 8 or more tools improved, with small losses on the rest. The window-aware constant B0 (412 s) is reported alongside |
+| S2 | Intervals | Pooled coverage of the nominal 90 % interval within [0.85, 0.95]; per-tool coverage reported. Winkler interval score below B2's empirical intervals (5,388 s; §8) |
+| S3 | Modality importance | Shapley values for the modalities that pass the leakage probe (force, tool, chip; the workpiece only if it passes), with 95 % bootstrap intervals over tools. The sign of the most important modality is resolved |
 | S4 | Integrity | Every check of §15 passes. No decision reads a test score (D15) |
 | S5 | Reproducibility | Every reported number regenerates from the saved predictions with one command |
 
@@ -209,109 +213,93 @@ physical passes per run, and only the force file was copied.
 |---|---|---|
 | Same-pass photo leaks the label | Copying the lag-0 photo's label scores 0.91-0.95 (`EDA.md` §7) | D9, plus a test |
 | Run number is a shortcut | Run number alone gives 71 % accuracy (OmniFuser F2) | No run or block codes; usage enters only as explicit, switchable time features; schedule baselines B1-B3 in every table |
-| Fz drifts | Sawtooth that resets every 1-3 passes; its level correlates with wear at −0.04 (F3) | All channels input (D4); a causal, offset-removed Fz_rel neutralizes the drift (§5.4); the channel study (§11.5) measures what Fz adds |
+| Fz drifts | Sawtooth that resets every 1-3 passes; its level correlates with wear at −0.04 (F3) | All channels input (D4); a generic descriptor, the mean change since the recording started, captures the drift (§6.2); the channel study (§11.5) measures what Fz adds |
 | Tool-to-tool force offset | T1's Fx sits at +1.15 sd of the training distribution (`EDA.md` §8) | Tokens carry the absolute level and the change from each tool's healthy start (§5.9). Relative-only removes static offsets such as T1's but not the cross-tool shift (Stage 2) |
-| Frozen ImageNet features read wear poorly | Photo probe 0.61-0.67 accuracy against 0.95 possible; the crop helps; resolution alone does not | Edge crop, DINOv2 grid, wear-regression readout; LoRA as a stretch goal |
-| Absolute embeddings plus elapsed time memorize units | Project 14 RUL GRU peaked after 1 epoch (`pdmfm/rul.py`) | Trajectory augmentation, small models, PCA; the token mode is decided in Gate 2b |
+| Frozen ImageNet features read wear poorly | Photo probe 0.61-0.67 accuracy against 0.95 possible; the crop helps; resolution alone does not | Edge crop, DINOv2-B features, wear-regression readout; LoRA fine-tuning documented as an alternative |
+| Absolute embeddings plus elapsed time memorize units | Project 14 RUL GRU peaked after 1 epoch (`pdmfm/rul.py`) | Trajectory augmentation, small models, a low-rank projection; the token mode is decided in Gate 2b |
 | Wear is not monotone | Flank wear decreases at 189 of 502 steps (F12) | Isotonic-smoothed wear targets; causal smoothing wherever wear is an *input* (R1) |
-| Workpiece photos encode the stage label (found in Stage 1) | Mean brightness steps at the first run of `tool_label` stage 2 in 10 of 10 tools (96 % of its range); texture also at stage 3 (`docs/EDA_RUL.md` §6) | Per-image standardization; Gate-1 stage-step leakage probe for every photo type (§6.2); exclusion if it fails |
+| Workpiece photos encode the stage label (found in Stage 1) | Mean brightness steps at the first run of `tool_label` stage 2 in 10 of 10 tools (96 % of its range); texture also at stage 3 (`docs/EDA_RUL.md` §6) | Per-image standardization; Stage-3 stage-step leakage probe for every photo type (§6.2); exclusion if it fails |
 | Whole-pass preprocessing leaks within the pass | OmniFuser's trim uses 5 % of the pass length | Causal trim (§5.2) |
 | Unrecorded runs | §2.5 | D12 |
 
 ### 2.7 The bar to beat
 
-Settings: segment ends; gap-aware axis; fold protocol D1; the 8 training
-tools of each fold.
+Settings: segment ends; gap-aware axis; fold protocol D1; the 8 training tools
+of each fold; the window RUL ≤ H = 1,500 s.
 
-| Predictor | Uses | MAE (passes) | RMSE (passes) | MAE (s) | RMSE (s) |
-|---|---|---|---|---|---|
-| B0: constant at half the window (7.5 passes; 750 s) | That the point lies in the window, which is the truth itself | 4.13 | 4.64 | **412** | 463 |
-| B1: mean training TTF − elapsed time, capped | Elapsed time | 5.17 | 5.65 | 513 | 562 |
-| B2: E[min(TTF − t, k) \| TTF > t] over the training tools | Elapsed time | **3.82** | 4.31 | 468 | 526 |
+| Predictor | Uses | MAE (s) | RMSE (s) |
+|---|---|---|---|
+| B0: constant H/2 = 750 s | That the point lies in the window, which is the truth itself | **412** | 463 |
+| B1: mean training failure time − elapsed time, capped | Elapsed time | 513 | 562 |
+| B2: E[min(τ* − τ, H) \| τ* > τ] over the training tools | Elapsed time | 468 | 526 |
 
 - **Same points as the model.** These baselines are computed at the segment
   ends where the model predicts, with the cap inside the expectation (the
   MSE-optimal usage-only predictor of the capped target).
-- **In seconds, B0 beats B2.** The window-aware constant (412 s) beats the
-  usage rule (468 s).
-- **B2's empirical 90 % intervals under-cover:** 0.42 in passes and 0.50 in seconds
-  (Winkler 49.4 passes, 5,388 s), the S2 reference.
-- **Recorded axis, for reference:** B2 scores 4.01 passes and 480 s.
+- **B0 beats B2.** The window-aware constant (412 s) beats the usage rule
+  (468 s). No deployable method has B0's knowledge.
+- **B2's empirical 90 % intervals under-cover:** 0.50 coverage (Winkler
+  5,388 s), the S2 reference.
+- **Recorded axis, for reference:** B2 scores 480 s.
 
 ---
 
 ## 3. Task definition
 
-### 3.1 Notation
+### 3.1 Notation (generic)
 
-For tool *u*, positions *p* = 1…N_u follow (run, block) on the gap-aware
-axis. *p* = 4 (run − r₀) + block, where r₀ is the tool's first recorded run.
+The core sees every dataset the same way (§6.11).
 
-- D_p: the causally trimmed cutting duration of pass *p* (§5.2). An
-  unrecorded pass gets the tool's median. τ_p = Σ_{q≤p} D_q is the cumulative
-  cutting time at its end.
-- Pass *p* is cut into segments *s* = 1…n_p (D7). Segment (p, s) ends at
-  elapsed time e_{p,s} inside the pass.
-- **Label time** in pass units: t_{p,s} = (p − 1) + e_{p,s} / D_p. **Time in
-  seconds:** τ_{p,s} = τ_{p−1} + e_{p,s}.
-- t_{p,s} contains D_p, which is unknown until the pass ends. It defines
-  labels only, never inputs (§3.3).
-- P*_u: the confirmed TTF pass. Failure is at the **end** of pass P*, when the
-  dulled state is first observed: t_TTF = P*, τ_TTF = τ_{P*}.
+- **Unit.** A unit u (here a tool) runs from new to failure.
+- **Recordings.** Its recordings r = 1…R_u (here passes) are contiguous sensor
+  captures. Recording r starts at τ_r seconds of operation and lasts D_r
+  seconds. Unrecorded operation between recordings (here the missing runs,
+  D12) only shifts τ.
+- **Segments.** Each recording is cut into segments (D7). Segment (r, s) ends
+  e_{r,s} seconds into the recording, at operating time τ_{r,s} = τ_r + e_{r,s}.
+- **Observations.** Observations (here the photos taken after each pass) carry
+  the time from which they may be read (D9).
+- **Failure time.** The failure time τ*_u comes from the adapter. For Nonastreda
+  it is the end of the confirmed TTF pass (D2), when the dulled state is first
+  observed.
 
-### 3.2 Targets
+### 3.2 Target
 
 $$
-\mathrm{RUL}_{p,s} = P^\ast - t_{p,s}\ \text{(passes)},\qquad
-\mathrm{RUL}^{\mathrm{sec}}_{p,s} = \tau_{P^\ast} - \tau_{p,s}\ \text{(s of cutting)},
-$$
-$$
-y_{p,s} = \min(\mathrm{RUL}_{p,s},\,k),\ k=15;\qquad
-y^{\mathrm{sec}}_{p,s} = \min(\mathrm{RUL}^{\mathrm{sec}}_{p,s},\,k^{\mathrm{sec}}),\ k^{\mathrm{sec}}=1{,}500\ \text{s}.
+\mathrm{RUL}_{r,s} = \tau^\ast - \tau_{r,s}\ \text{(seconds of operation)},\qquad
+y_{r,s} = \min(\mathrm{RUL}_{r,s},\,H),\ H = 1{,}500\ \text{s}.
 $$
 
-**Both targets are predicted at every segment.**
-
-- Seconds answer "how long can I keep cutting"; passes answer "how many more
-  passes".
-- The two differ across tools because pass length does.
-- Inside a pass, the seconds target falls by exactly the elapsed cutting
-  time.
-
-**Points, windows and training.**
-
-- **Prediction points:** every segment end of the recorded passes 1…P*:
-  3,747 points. Points after the TTF carry no RUL target.
-- **Evaluation windows:** passes: RUL ≤ 15 (1,338 points); seconds: RUL^sec
-  ≤ 1,500 s (1,361 points). Inside its window each target equals the true
-  RUL.
-- **Training:** every pre-TTF point, with the capped (piecewise-linear)
-  targets.
-- **Auxiliary targets** (training tools only):
-  - VB̃_p, the isotonic-smoothed flank wear of the current pass, over all
-    recorded passes including those after the TTF;
-  - optionally the ordinal wear class.
+- **One target, predicted at every segment:** "how long can I keep cutting".
+  Inside a recording it falls by exactly the elapsed operating time.
+- **Prediction points:** every segment end of the recordings up to the
+  failure: 3,747 points. Points after the failure carry no RUL target.
+- **Evaluation window:** RUL ≤ H (1,361 points). Inside it the target equals
+  the true RUL.
+- **Training:** every pre-failure point, with the capped (piecewise-linear)
+  target.
+- **Auxiliary target (optional, generic):** a **health indicator** (HI), when
+  the dataset measures one. Here it is VB̃, the isotonic-smoothed flank wear of
+  the current pass, over all recorded passes including those after the TTF.
 
 **Worked examples.**
 
-- **T5** (P* = 19). At the end of pass 4, RUL = 15 and the window opens. At
-  the end of segment 5 of pass 10 (record T5R3B2, 96.05 s long), t = 9 + 50/96.05
-  = 9.52 and RUL = 9.48 passes. τ = 909.7 s and T5 fails at 1,827.0 s, so
-  RUL^sec = 917.3 s, about 15 min of cutting. At the end of pass 19 both are 0.
+- **T5** (τ* = 1,827.0 s). At the end of segment 5 of pass 10 (record
+  T5R3B2), τ = 909.7 s, so RUL = 917.3 s, about 15 min of cutting.
   `scripts/end_to_end_trace.py` reproduces these numbers.
-- **T4** (P* = 38). At the end of R5B4 (pass 20), RUL = 18 passes. The
-  recorded axis would say 2.
+- **T4** (τ* = 3,657.2 s). At the end of R5B4 (pass 20, τ = 1,922.1 s),
+  RUL = 1,735.1 s. The recorded axis would say 193.7 s.
 
-### 3.3 What the model may read at point (p, s)
+### 3.3 What the model may read at point (r, s)
 
 | Input | Available | Never |
 |---|---|---|
-| Force | Segments of passes < *p*, plus segments 1…*s* of pass *p* | Later segments |
-| Photos (tool, chip, workpiece) | Of passes < *p* | Of pass *p* or later |
-| Usage | Completed passes *p* − 1 (gap-aware), elapsed cutting seconds τ_{p,s}, elapsed seconds in the current pass e_{p,s} | D_p before the pass ends; t_{p,s} |
-| Labels | None | `image_label`, `tool_label`, flank wear, gaps, overhang, run or block codes |
+| Signals | Segments of recordings < r, plus segments 1…s of recording r | Later segments |
+| Observations (photos) | Those whose availability time has passed: here the photos of recordings < r | Photos of recording r or later |
+| Usage | Operating time τ_{r,s}; seconds since the current recording started, e_{r,s} | The current recording's total duration before it ends; any count of passes, runs or blocks |
+| Labels | None | `image_label`, `tool_label`, flank wear, gaps, overhang |
 
-The causality tests of §15 (part P10, P11) enforce this table.
+The causality tests of §15 (P10, P11) enforce this table.
 
 ---
 
@@ -331,60 +319,54 @@ The causality tests of §15 (part P10, P11) enforce this table.
 
 | Object | Fitted on |
 |---|---|
-| Standardization, PCA, ridge probes (α by inner leave-one-tool-out) | The 8 training tools |
+| Level-descriptor standardization; ridge probes and HI readouts (α by inner leave-one-tool-out) | The 8 training tools |
 | Wear readouts used as training inputs | Cross-fitted on the training tools (§7.2) |
-| Tool baseline (§5.9) | Each tool's own first passes, causally, including the test tool |
-| Wear threshold θ and degradation prior (B5, R1) | The training tools |
+| Tool baseline (§5.9) | Each tool's own first B recordings, causally, including the test tool |
+| HI threshold θ and degradation prior (B5, R1) | The training tools |
 | Step selection | The validation tool |
 | Interval calibration | Out-of-fold predictions on the training tools (default), or the validation tool (§9) |
 | Test tool | Prediction only |
 
-### 4.3 Metrics for selection and decisions
+### 4.3 Metric for selection and decisions
 
-**Pass-equivalent MAE.** Both units count equally:
-
-$$
-\mathrm{MAE}_{\mathrm{eq}} = \tfrac12\big(\mathrm{MAE}_{\mathrm{pass}} + \mathrm{MAE}_{\mathrm{sec}}/100\ \mathrm{s}\big),
-$$
-
-where 100 s = k_sec / k. Reports always give both units separately.
+**MAE in seconds.** It is also reported relative to the horizon (MAE / H), so
+that datasets with other horizons can be compared.
 
 **In-fit step selection.**
 
-- Every 10 steps, compute the validation tool's MAE_eq over its whole pre-TTF
+- Every 10 steps, compute the validation tool's MAE over its whole pre-failure
   life, with the training-loss weights (§7.3), using the EMA weights.
 - Keep the step with the lowest mean of 3 consecutive evaluations.
-- Why the whole life and not only the k-window: T4, the validation tool of
-  fold 3, has only 20 window points.
+- Why the whole life and not only the window: T4, the validation tool of fold
+  3, has only 20 window points.
 
 ### 4.4 Design decisions: gates with rules fixed in advance
 
 All gate scores come from the 3-seed ensemble, on the validation tools.
 
-- **Rule A: adding complexity or switching an option on.** Adopt only if all
-  three hold:
-  - the mean validation k-window metric over the 10 folds improves by at
+- **Rule A: adding complexity or switching an option on.** Adopt only if both
+  hold:
+  - the mean validation window MAE (s) over the 10 folds improves by at
     least the gate's threshold;
   - the option wins on at least 7 of the 10 validation tools (the chance
-    probability of 7 or more is 0.17);
-  - neither unit worsens by more than 5 %.
+    probability of 7 or more is 0.17).
 - **Rule B: choosing among peers of similar cost.** Take the best mean. Within
   half the gate's threshold, take the cheaper or more interpretable one.
 
 | Gate | Metric | Rule-A threshold |
 |---|---|---|
-| Gate 1 (encoders, derived channels) | Validation VB MAE of the ridge probe (µm) | 1.0 µm |
-| Gate 2 (fusion, options, sweep) | k-window MAE_eq | 0.10 |
-| Gate 3 (head, calibration, filter) | Winkler 90 % interval score, pass-equivalent, subject to validation coverage within [0.85, 0.95] | 3 % relative |
+| Stage-3 feature check (no ranking, §6.2) | Pass/fail: the VB probe beats the training mean; the photo leakage probe | – |
+| Gate 2 (fusion, options, sweep) | Window MAE (s) | 10 s (H/150) |
+| Gate 3 (head, calibration, filter) | Winkler 90 % interval score (s), subject to validation coverage within [0.85, 0.95] | 3 % relative |
 
 **Caveat.** Fold *i*'s validation tool is fold *i+1*'s test tool, so
 cross-fold choices touch every tool once. This is the same as in OmniFuser
-and Project 14. The plan keeps the decisions few (16, listed in §17.3) and
+and Project 14. The plan keeps the decisions few (10, listed in §17.3) and
 states the count in the report.
 
 ### 4.5 Seeds and ensembles
 
-- Gates use the 3-seed ensemble; the final runs use the 5-seed ensemble.
+- Gates and the final runs both use the 3-seed ensemble (D19).
 - The seed spread is a diagnostic (§7.8), not a reported score.
 
 ### 4.6 Test-score policy (D15)
@@ -403,6 +385,14 @@ states the count in the report.
 
 Every step is a pure function with a unit test (§15). The pipeline is cached
 by a signature hash: data manifest + settings.
+
+**Adapter or core (D18).**
+
+- **Nonastreda adapter:** loading, trimming and the timeline with its gaps and
+  duplicates (§5.1-§5.3), the TTF rules (§5.6), and the photo preparation
+  (§5.7).
+- **Generic core:** channels and descriptors (§5.4), segmentation (§5.5), the
+  RUL target (§5.6) and normalization (§5.9).
 
 ### 5.1 Load: `rulfuse/data/nonastreda.py`, vendored from OmniFuser
 
@@ -442,45 +432,56 @@ Step 2 needs the pass length, which is unknown while the pass runs.
 
 ### 5.4 Channels
 
-**All three measured channels are always input:** Fx, Fy and Fz. Two derived
-channels are added.
+**All three measured channels are always input:** Fx, Fy and Fz. One derived
+channel is added by a generic rule: the magnitude of every 3-axis sensor group.
 
 | Channel | Definition | Why |
 |---|---|---|
 | Fx, Fy, Fz | Raw, trimmed | Every measured channel (your instruction) |
-| Fz_rel | Fz minus its mean over the pass's first second | Removes the drift's sawtooth level but keeps Fz's dynamics; causal |
-| \|F\| | √(Fx² + Fy² + Fz²) | The resultant force, the classic wear indicator |
+| \|F\| | √(Fx² + Fy² + Fz²) | The resultant force, the classic wear indicator. Stage 1: ρ 0.70 with wear across tools |
 
-- **Per channel:**
-  1. the encoder embeddings (mean and sd over the sub-windows);
-  2. concatenated with that channel's physics features;
-  3. standardized and PCA-reduced to 16 components (8 on the absolute values,
-     8 on the values relative to the tool's healthy start; §5.9);
-  4. the five blocks concatenated into an 80-dimensional force token.
-- A channel can therefore be masked cleanly (channel dropout, §6.8; the
-  channel study, §11.5).
-- **Gate 1** decides only whether the two *derived* channels stay. The raw
-  channels are never removed from the main model.
+**Fz_rel is no longer a channel.** Its information was Fz's drift since the
+pass started (Stage 1: ρ 0.28 with wear). It is now a generic level descriptor
+of every channel, the mean change since the recording started (§6.2), and needs
+no Nonastreda-specific rule.
+
+**One channel, one vector,** built the same way for any channel of any dataset:
+
+1. The Mantis-8M embedding of each 512-sample sub-window, mean- and
+   sd-pooled over the segment: 512 values.
+2. The channel's 7 **level descriptors** (§6.2): what a scale-normalized
+   encoder cannot see.
+
+**The channels form a set, not fixed slots.**
+
+- Each channel vector gets a *channel-descriptor embedding* (sensor type, axis,
+  derivation; §6.3), and the segment token pools over the set.
+- A missing channel is simply absent, and another dataset with other sensors
+  (for example accelerometers or a microphone) uses the same machinery.
+- Channel dropout (§6.8) and the channel study (§11.5) remove channels from the
+  set.
 
 ### 5.5 Segment
 
-- 10 s windows from the trimmed pass start; a remainder under 5 s joins the
-  previous segment. This gives 8 segments per pass on T9, 12 on T10 and 10
-  elsewhere.
+- S = 10 s windows from the (trimmed) recording start; a remainder under S/2
+  joins the previous segment. On Nonastreda this gives 8 segments per pass on
+  T9, 12 on T10 and 10 elsewhere.
 - Encoder sub-windows: 512 samples, the last aligned to the segment end so
   every sample is covered.
-- Each segment stores: tool, pass, index, start and end sample, e_{p,s},
-  t_{p,s} (label time only), τ_{p,s}, `force_present`.
+- Each segment stores: unit, recording, index, start and end sample, e_{r,s},
+  τ_{r,s}, `signal_present`.
 
-### 5.6 Labels: `rulfuse/data/labels.py`
+### 5.6 Labels
 
-- The five TTF rules of §2.3, selected by config key `ttf_rule`. Each is
-  applied to the recorded label sequence; a TTF can never fall in a gap.
-- RUL in passes and in seconds; capped targets; evaluation and pre-TTF masks.
-- VB̃ per pass: isotonic regression per tool over the recorded passes
-  (`scipy.optimize.isotonic_regression`). It is a target only. The causal
-  version (isotonic fit on the passes up to now) is used where measured wear
-  is an *input* (oracle R1).
+- **Adapter (Nonastreda).**
+  - The five TTF rules of §2.3, selected by config key `ttf_rule`. Each is
+    applied to the recorded label sequence; a TTF can never fall in a gap.
+  - It returns each unit's failure time τ* (the end of the TTF pass).
+  - Optionally it returns the health indicator (VB̃: isotonic flank wear, full
+    and causal) and the stage labels used by the leakage probe.
+- **Core.** RUL in seconds from τ*; the capped target; the evaluation and
+  pre-failure masks. The causal HI is used where a measured HI is an *input*
+  (oracle R1).
 
 ### 5.7 Images: `rulfuse/data/images.py`
 
@@ -489,9 +490,9 @@ normalized with the ImageNet statistics.
 
 | Photo | Preparation |
 |---|---|
-| Tool | Crop rows 0.30-0.85 at full width (the OmniFuser probe's best band). Resize to 224 × 672 (Project 14's setting), or tile into 3 × 224² tiles near native height |
-| Chip | Resize to 448², or to 224² (Gate-1 candidates) |
-| Workpiece | Resize to 224²; standardize each image's luminance (zero mean, unit variance) to remove the per-stage exposure step (`docs/EDA_RUL.md` §6) |
+| Tool | Crop rows 0.30-0.85 at full width (the OmniFuser probe's best band). Resize to 224 × 672 (Project 14's setting) |
+| Chip | Resize to 448² |
+| Workpiece | Resize to 224²; standardize each image's luminance to mean 0.5, sd 0.2, to remove the per-stage exposure step (`docs/EDA_RUL.md` §6; Stage 2 showed the texture step remains) |
 
 ### 5.8 Stores and caches
 
@@ -517,27 +518,34 @@ normalized with the ImageNet statistics.
   every `DatasetOptions` field and the segment settings. The default store is
   `8d2b69c23453`: 532 passes, 5,125 segments, 3,747 prediction points, 3,777
   distinct segments to encode.
-- **Feature caches:** `interim/features/<modality>-<encoder>-<signature>/`,
-  holding an `(n_items, dim)` float16 array and an index.
-  - The signature names the checkpoint revision and the preprocessing
-    (Project 14's `FeatureStore`).
-  - Duplicated recordings are encoded once, which saves 26 % of the encoder
-    calls.
+- **Feature caches (Stage 3), two in total:**
+  - `interim/features/force-mantis8m-<signature>/`: per distinct segment and
+    channel, the pooled Mantis-8M embedding (512 values) and the 7 level
+    descriptors (3,777 segments × 4 channels);
+  - `interim/features/photo-dinov2b-<signature>/`: per photo and type, the CLS
+    and 2 × 4 patch-grid tokens (9 × 768 values; 1,536 photos).
+  - The signature names the checkpoint revision and the preprocessing (Project
+    14's `FeatureStore`). Duplicated recordings are encoded once.
 
 ### 5.9 Normalization
 
-- **Fold level.** Standardize each feature with the training tools' mean and
-  sd. Then apply PCA, fitted on the training tools: 32 components per photo
-  type and 16 per force channel in total, half on the absolute features and
-  half on the tool-relative ones (token mode "both", below).
+- **No PCA in the model (changed 2026-11-04, D17).**
+  - The frozen embeddings reach the model through a LayerNorm and a learned
+    low-rank projection (§6.3), which are part of the reusable backbone (§6.10).
+  - The only statistic fitted on the training tools is the standardization of
+    the 7 level descriptors, whose units differ between datasets: the
+    "dataset adapter".
+  - PCA remains only as an analysis tool (inside the leakage probe and the
+    diagnostics) and in baseline B4.
 - **Tool level (causal baseline).**
   - The relative half of each token is taken against the tool's healthy start:
-    $$\tilde z = z - b_u(t),\qquad b_u(t) = \text{mean of } z \text{ over the tool's force segments in its first } B=4 \text{ recorded passes, among those seen by } t .$$
+    $$\tilde z = z - b_u(t),\qquad b_u(t) = \text{mean of } z \text{ over the tool's force segments in its first } B=4 \text{ recordings, among those seen by } t .$$
   - Photos are taken relative to the tool's first photo.
-  - The wear readouts (§6.2) stay **absolute**: a dull edge looks dull on any
+  - The HI readouts (§6.2) stay **absolute**: a dull edge looks dull on any
     tool.
-  - **Token mode (changed in Stage 2): "both" by default.** Every token carries an
-    absolute half and a tool-relative half, at the same total size.
+  - **Token mode (changed in Stage 2): "both" by default.** Every token is built
+    from the absolute values and from their change since the tool's healthy
+    start: two inputs to the same projection.
     - The plan assumed relative tokens would remove tool identity.
     - Stage 1 found absolute force levels relate to wear across tools at least as
       well (`docs/EDA_RUL.md` §7).
@@ -559,23 +567,25 @@ normalized with the ImageNet statistics.
 ```
  pass 1 ......... pass p-1 | pass p: segments 1..s                     time →
  ┌──────────┐   ┌──────────┐   ┌──────────┐
- │ force seg│...│ force seg│...│ force seg│  raw 1 kHz Fx, Fy, Fz (+ Fz_rel, |F|), 10 s
+ │ force seg│...│ force seg│...│ force seg│  raw 1 kHz Fx, Fy, Fz (+ |F|), 10 s
  └────┬─────┘   └────┬─────┘   └────┬─────┘
-      ▼ per channel: frozen TS encoder on 512-sample sub-windows (mean+sd) ⊕ physics features
-      ▼ standardize → per channel PCA(8) absolute ⊕ PCA(8) relative to the causal baseline → MLP → d=64
- photos of passes < p (tool | chip | workpiece)
-      ▼ frozen image encoder on the crop → PCA(32) → minus the first photo → MLP → d=64
-      ▼ + absolute wear readout VB̂ (cross-fitted ridge probe)
+      ▼ per channel: frozen Mantis-8M on 512-sample sub-windows (mean+sd) ⊕ 7 level descriptors
+      ▼ absolute ⊕ change from the healthy start → LayerNorm → shared low-rank projection
+      ▼ + channel-descriptor embedding → pooled over the channel set → MLP → d=64
+ images available before the point (here tool | chip | workpiece, each if it passes the leakage probe)
+      ▼ frozen DINOv2-B: CLS + 2×4 patch tokens; absolute ⊕ change from the first image
+      ▼ LayerNorm → shared low-rank projection + image-type embedding → attention pool → d=64
+      ▼ + HI readout when the dataset has an HI (cross-fitted ridge probe)
  ─────────────────────────────────────────────────────────────────────────────
  tokens ordered by availability time + modality embedding (+ usage features, switchable)
       ▼
  causal fusion model with a relative-time attention bias:
       F1 token fusion (one transformer)   |   F0 late fusion (experts + gPoE)
       ▼ at every force-segment token (= prediction point)
- heads: RUL in seconds and in passes, Student-t (μ, σ, ν) each · wear nowcast VB̂
+ heads: RUL in seconds, Student-t (μ, σ, ν) · health-indicator nowcast (optional)
       ▼
- 5-seed ensemble → calibration (out-of-fold) → optional causal RUL filter
-      → "≈ 640 s (90 %: 420-900 s) of cutting left; ≈ 6.6 passes (4.3-9.2)"
+ 3-seed ensemble → calibration (out-of-fold) → optional causal RUL filter
+      → "≈ 640 s (90 %: 420-900 s) of cutting left"
 ```
 
 Why a hierarchy:
@@ -589,93 +599,124 @@ Why a hierarchy:
   learnable part stays small (about 0.1-0.15 M parameters) on top of fixed,
   general representations.
 
-### 6.2 Encoders, screened in Gate 1
+### 6.2 Encoders and level descriptors (fixed; no screening)
 
-**Force** (per channel and 10 s segment):
+**One encoder per modality, chosen by reasoning, not by a search (D16, your
+instruction of 2026-11-04).** This removes Gate 1's encoder screening and every
+Ruche feature job.
 
-| ID | Encoder | Dim per window | Notes |
+| Modality | Encoder | Why this one | Cost |
 |---|---|---|---|
-| H | Physics features: mean, sd, RMS, peak-to-peak, skewness, kurtosis, crest factor; 16 band energies 0-500 Hz; energy at the 66.7 Hz spindle line and harmonics (Project 14 EDA F11); spectral centroid and entropy; period-15 synchronous-average amplitude | about 20 per channel | Always present; the cheap reference |
-| MA | Mantis-8M (`paris-noah/Mantis-8M`) | 256 | Project 14 wrapper |
-| MO | MOMENT-1 base / large (`AutonLab/MOMENT-1-base`, `-large`) | 768 / 1024 | Project 14 wrapper (base) |
-| CH | Chronos encoder embeddings (`amazon/chronos-t5-small`, `pipeline.embed`) | 512 | New wrapper; check the API at install |
-| AST | Audio Spectrogram Transformer (`MIT/ast-finetuned-audioset-10-10-0.4593`) | 768 | Project 14 wrapper |
-| SP | Segment spectrograms (VLT-style STFT, FFT and recurrence maps, OmniFuser `spectrogram.py`) into frozen DINOv2-S | 384 | OmniFuser's best forecasting input |
-| PT | Own PatchTST, masked-reconstruction pretrained per fold on the training tools | 128 | Project 14 `patchtst.py`; stretch goal |
+| Force (every channel) | **Mantis-8M** (`paris-noah/Mantis-8M`), frozen | A time-series foundation model pretrained for *classification* on diverse public series, whose frozen features are its intended use. Channel-independent, so any sensor set fits. Small (8 M parameters). Already wrapped and cached in Project 14 | 3,777 segments × 4 channels × 20 sub-windows ≈ 300 k windows: minutes on the laptop CPU |
+| Photos (tool, chip, workpiece) | **DINOv2-B/14** (`facebook/dinov2-base`), frozen | Self-supervised general features that keep fine local texture (what wear changes). Not gated. Project 14 wraps the same family | 1,536 photos: about 30 min on the laptop CPU |
 
-**Photos** (per pass and photo type):
+**Level descriptors: the physics features that stay.**
 
-| ID | Encoder | Notes |
-|---|---|---|
-| EB0 | EfficientNet-B0, ImageNet (torchvision) | OmniFuser's encoder; the reference |
-| D2-S/B | DINOv2 small or base: CLS plus patch grid pooled to 2 × 4, flattened | Project 14 wrapper |
-| SG2 | SigLIP 2 base (`google/siglip2-base-patch16-224`) | New wrapper |
-| D3 | DINOv3 ViT-S/B (gated; check access and licence in Stage 0) | Optional |
-| HC | Handcrafted: HSV colour histograms (chip tint), LBP and GLCM texture (workpiece), edge-band gradient profile (tool) | Cheap reference |
+- **Why they are needed.** Foundation encoders are built to be
+  scale-invariant: MOMENT normalizes every input window (reversible instance
+  normalization), and Project 14 treated Mantis the same way. Its
+  `preprocess.py` describes level descriptors as "what per-input normalized
+  encoders cannot see (absolute level, DC trend)". Without them, the absolute
+  force level, Stage 1's strongest wear signal (RMS of \|F\|, ρ 0.70 with wear
+  across tools), would be lost. Stage 3 verifies Mantis's scale invariance on
+  the real segments.
+- **What they are.** Per channel and segment, 7 generic descriptors (Project 14's
+  `level_descriptors` and `slow_summary`, plus one):
+  - log10 RMS and log10 peak of the AC part;
+  - Pearson kurtosis;
+  - crest factor;
+  - mean;
+  - least-squares slope;
+  - the mean change since the recording started: the drift a recording
+    accumulates. It replaces the Nonastreda-specific Fz_rel channel.
 
-**Gate 1 (CPU, minutes once the features are cached).**
+  They exist for any signal, need no machine parameters, and enter both
+  absolute (standardized per dataset) and relative to the tool's healthy start
+  (log ratios: unit-free).
+- **Dropped from the model:** the Nonastreda-specific features. Those are the
+  energy at the inferred 66.7 Hz spindle line and its harmonics, and the
+  period-15 synchronous average: they need the machine's spindle speed and tooth
+  count. The fixed-Hz band energies also go; they depend on the sampling rate
+  and the process.
+- **Kept outside the model:** the full handcrafted set (H) feeds baseline B4
+  and the diagnostics only.
 
-1. For each modality and candidate, pool to one vector per recorded pass
-   (force: the mean over the pass's segments). Standardize and apply PCA on
-   the training tools.
-2. Fit a ridge regression on the 8 training tools (α by inner
-   leave-one-tool-out) to VB̃ of the pass. Score it on each fold's validation
-   tool.
-3. **Choose by validation VB MAE (Rule B).** A per-pass probe cannot
-   integrate history, so the wear *state* is what a pass-level feature must
-   carry. A snapshot probe of RUL mostly separates healthy from worn (Project
-   14).
-4. **Guard:** a ridge probe of capped RUL (with usage features) must not be
-   worse than H's by more than 0.3 MAE_eq.
-5. Concatenations of two encoders are candidates too.
-6. The **derived force channels** (Fz_rel, |F|) are decided here by Rule A
-   on VB MAE.
-7. The chosen photo encoder's ridge probe becomes the **wear readout** VB̂
-   (µm) of each photo. It is cross-fitted on the training tools (§7.2).
-8. **Leakage probe for every photo type (added in Stage 1).**
-   - Run `rulfuse.audit.stage_steps` on the chosen encoder's first 3 PCA
-     components and on its wear readout.
-   - A photo type passes if a `tool_label` stage boundary is its largest
-     run-boundary step in **at most 3 of 10 tools**. The force and the tool
-     photo's global statistics score 0-1 of 10; the raw workpiece brightness
-     scores 10 of 10.
-   - Workpiece photos are luminance-standardized per image before encoding.
-   - A failing type leaves the headline model and the Shapley study and is
-     reported as a leakage demonstration (`docs/EDA_RUL.md` §6).
+**Alternatives (documented, not run).**
+
+- **Force:** MOMENT-1 base or large (the fallback if Mantis fails the feature
+  check), Chronos-T5 embeddings, AST, segment spectrograms into DINOv2, own
+  PatchTST.
+- **Photos:** EfficientNet-B0, SigLIP 2, DINOv3 (gated), handcrafted colour and
+  texture.
+- **Fine-tuning:** LoRA on DINOv2 with the wear target.
+
+**Stage-3 feature check (replaces Gate 1's screening; laptop CPU; no
+ranking).** It only checks that the chosen features work and are clean.
+
+1. **Scale check.** Is a window's Mantis embedding (nearly) unchanged when the
+   window is multiplied by 2? If so, the level descriptors alone carry the
+   level, as expected. They are kept either way.
+2. **Information check (go/no-go).**
+   - A ridge probe (α by inner leave-one-tool-out) maps pass-level pooled
+     features to VB̃, scored on each fold's validation tool. Force (Mantis +
+     descriptors) and each photo type must beat the training-mean predictor.
+   - The descriptors alone and Mantis alone are reported too, to show what each
+     adds.
+   - Only a force no-go triggers the fallback encoder (MOMENT-1-base).
+3. **HI readouts.** The cross-fitted ridge readout of the HI (here VB̂) from
+   each image type (§7.2).
+4. **Leakage probe for every photo type.**
+   - `rulfuse.audit.stage_steps` runs on the photo features' first 3 principal
+     components (PCA as an analysis tool only) and on the HI readout.
+   - A type passes if a `tool_label` stage boundary is its largest run-boundary
+     step in **at most 3 of 10 tools**.
+   - Failing types leave the headline model and the Shapley study and are
+     reported as a leakage demonstration. The Stage-2 preview says the
+     workpiece photos will fail (texture steps in 9 of 10 tools after
+     standardization).
 
 ### 6.3 Tokens and time
 
 | Token | Content | Position |
 |---|---|---|
-| Force segment (p, s) | Projected force token (absolute and tool-relative halves); `force_present` flag. A force-missing segment uses a learned mask vector | Its end time τ_{p,s} |
-| Photo (p, m), m ∈ {tool, chip, work} | Projected photo features (absolute and relative-to-first-photo halves) + the absolute wear readout VB̂ | Immediately after the last segment of pass *p*, so only from pass *p+1* on (D9) |
+| Force segment (r, s) | For each of the 4 channels: LayerNorm of [Mantis embedding ⊕ descriptors, absolute ⊕ change from the healthy start] → shared low-rank projection (rank 16) + channel-descriptor embedding; mean over the channel set → MLP → d = 64. `force_present` flag; a force-missing segment uses a learned mask vector | Its end time τ_{r,s} |
+| Image (r, m), m = an image type supplied by the adapter (here tool, chip, work) | 9 DINOv2-B tokens (CLS + 2 × 4 grid), absolute ⊕ change from the unit's first image of that type → LayerNorm → shared low-rank projection (rank 16) + image-type and patch-position embeddings → attention pooling → d = 64; plus its HI readout (here VB̂) when the dataset has an HI | At its availability time: here after the last segment of its pass, so only from the next pass on (D9) |
 
-- **Usage features (U, switchable):** Fourier features of the completed
-  passes *p* − 1 and of τ_{p,s}, plus e_{p,s}. They are added to every force
-  token. The absolute time embedding is part of U and switches off with it.
+- **Usage features (U, switchable):** Fourier features of the operating time
+  τ_{r,s} (scaled by H) and of e_{r,s}, the seconds since the current recording
+  started. They are added to every force token. The absolute time embedding is
+  part of U and switches off with it.
 - **Relative time:** each attention head adds a learned bias
   b_h(Δτ) = MLP_h(log(1 + Δτ / 10 s)), where Δτ is the cutting time between
   the query and the key. This gives every token, photos included, its age
   relative to the prediction point, without revealing absolute time.
 - **Modality embedding** on every token.
+- **Channel descriptors (for transfer).** A channel's embedding is the sum of
+  three learned embeddings: sensor type (force, acceleration, sound, …), axis
+  (x, y, z, none) and derivation (raw, magnitude).
+  - Nonastreda uses force × {x, y, z} × raw and force × none × magnitude.
+  - A new dataset reuses the descriptors it shares and learns the new ones.
 - **Sensing-only control (§11.4):** a causal model over the full history can
   infer elapsed time from the token count, even with U off. The control
-  therefore reads only the last 4 recorded passes, with U off.
+  therefore reads only the last 4 recordings, with U off.
 
 ### 6.4 Fusion: the two candidates (D13)
 
 | ID | Design | Why it is a finalist |
 |---|---|---|
 | **F1 Token fusion** | One causal transformer over the interleaved sequence of §6.3: 2 layers, d = 64, 4 heads, FFN 128, pre-LN, dropout 0.2, relative-time bias, U features. The prediction is read at every force token | The most flexible. Attention can learn cross-modal timing, for example "the force has risen since the last photo" |
-| **F0 Late fusion (generalized product of experts)** | Five experts, each with a dual-unit Student-t head (details below) | Robust to a missing modality. The weights α_m read directly as time-resolved modality importance. Project 14 found late fusion hard to beat on Nonastreda |
+| **F0 Late fusion (generalized product of experts)** | Three experts, each with a Student-t head (details below) | Robust to a missing modality. The weights α_m read directly as time-resolved modality importance. Project 14 found late fusion hard to beat on Nonastreda |
 
 **F0's experts.**
 
 - **U:** an MLP on the usage features.
-- **F:** a causal transformer over the force tokens.
-- **T, C, W:** a causal GRU (d = 32) over each photo type's tokens. Inside a
-  pass, a photo expert's mean falls with the cutting time since its last
-  photo.
+- **S (signals):** a causal transformer over the force tokens, whatever the
+  channel set.
+- **I (images):** one causal GRU (d = 32) over all image tokens, whatever their
+  type; a type embedding tells them apart. Between images its mean falls with
+  the operating time since the last image.
+- One expert per photo type would be Nonastreda-specific. The Shapley study
+  (§11) still separates the photo types by retraining.
 - Sensing experts get **relative time only**: no absolute usage, so usage is
   not counted several times.
 
@@ -704,70 +745,157 @@ winner (§7.5).
 | Early concatenation | Append the last photos' features to every force token, then one sequence model | A special case of F1 without photo history | Never as a main model; useful as a debugging reference |
 | C2F (OmniFuser), MBT, Perceiver | Shared/private decomposition; bottleneck tokens; latent cross-attention | OmniFuser: C2F did not beat concatenation; Project 14's Gate-2 pilot: no candidate beat late fusion | A larger dataset (MATWI) is added |
 | MulT | Bidirectional cross-modal transformers per modality pair | 12 cross-attention streams for 4 modalities; too large for 8 trajectories | — |
-| F5 Health indicator + extrapolation | Fused wear nowcast VB̂(t), then a degradation curve with a prior from the training tools; RUL = crossing of θ ≈ 112 µm | Not a fusion strategy. Its machinery is kept and used by baselines B5 and R1 (§8) | F0 and F1 lose to B5; then the fused nowcast + F5 becomes a candidate |
+| F5 Health indicator + extrapolation | Fused HI nowcast (here VB̂(t)), then a degradation curve with a prior from the training tools; RUL = crossing of θ ≈ 112 µm | Not a fusion strategy. Its machinery is kept and used by baselines B5 and R1 (§8) | F0 and F1 lose to B5; then the fused nowcast + F5 becomes a candidate |
 | TFT-style variable selection | Learned per-token feature gating | Overlaps with F0's weights | — |
 
 ### 6.6 Heads
 
 | Head | Parameterization | Status |
 |---|---|---|
-| **Dual-unit Student-t** | Per unit u ∈ {s, pass}: μ_u = k_u·sigmoid(w_{μ,u}ᵀh); σ_u = softplus(w_{σ,u}ᵀh) + 0.005·k_u; ν_u = 3 + softplus(w_{ν,u}ᵀh) (finite variance) | Default |
-| Quantile | 7 quantiles 0.05…0.95 per unit, non-crossing by cumulative softplus increments; pinball loss | Gate-3 comparator |
-| Single-unit control | One seconds head; passes = μ_s / D̄, with D̄ the tool's mean recorded pass duration so far | Reported control |
-| Wear nowcast VB̂ | Linear on h | Auxiliary task |
-| Ordinal wear (CORAL) | 2 thresholds | Auxiliary, off |
-| NIG (evidential), discrete hazard | Project 14 `losses.nig_*`; hazard over pass bins | Alternatives, not run: the ensemble already gives the epistemic part |
+| **Student-t (RUL in seconds)** | μ = H·sigmoid(w_μᵀh); σ = softplus(w_σᵀh) + 0.005·H; ν = 3 + softplus(w_νᵀh) (finite variance) | Default |
+| Quantile | 7 quantiles 0.05…0.95, non-crossing by cumulative softplus increments; pinball loss | Gate-3 comparator |
+| Health-indicator nowcast | Linear on h; used when the dataset has an HI (here flank wear) | Auxiliary task |
+| NIG (evidential), discrete hazard | Project 14 `losses.nig_*`; hazard over time bins | Alternatives, not run: the ensemble already gives the epistemic part |
 
-Intervals are clipped to [0, k_u].
+- Intervals are clipped to [0, H].
+- **Removed (dataset-specific):** the passes head, the single-unit control, and
+  the ordinal wear-class head (CORAL), which depended on Nonastreda's three
+  classes.
 
 ### 6.7 Loss
 
 $$
-\mathcal L = \sum_{u\in\{\mathrm{s},\,\mathrm{pass}\}}\Big[\underbrace{\textstyle\sum_i w_{u,i}(\mu_{u,i}-y_{u,i})^2/k_u^2}_{\text{MSE (primary)}}
-+ \lambda_{\text{nll}}\,\textstyle\sum_i w_{u,i}\,\mathrm{NLL}_t\!\big(y_{u,i} \mid \mathrm{sg}(\mu_{u,i}),\sigma_{u,i},\nu_{u,i}\big)
-+ \lambda_{\text{cons}}\!\!\sum_{(i,j)}\!\frac{\big(\mu_{u,i}-\mu_{u,j}-(T_{u,j}-T_{u,i})\big)^2}{k_u^2}\,\mathbb 1[y_{u,i}<k_u]\Big]
-+ \lambda_{\text{vb}}\,\mathrm{Huber}\big(\widehat{VB}-\widetilde{VB}\big)/s_{VB}
+\mathcal L = \underbrace{\textstyle\sum_i w_i(\mu_i-y_i)^2/H^2}_{\text{MSE (primary)}}
++ \lambda_{\text{nll}}\,\textstyle\sum_i w_i\,\mathrm{NLL}_t\!\big(y_i \mid \mathrm{sg}(\mu_i),\sigma_i,\nu_i\big)
++ \lambda_{\text{cons}}\!\!\sum_{(i,j)}\!\frac{\big(\mu_i-\mu_j-(\tau_j-\tau_i)\big)^2}{H^2}\,\mathbb 1[y_i<H]
++ \lambda_{\text{hi}}\,\mathrm{Huber}\big(\widehat{\mathrm{HI}}-\mathrm{HI}\big)/s_{\mathrm{HI}}
 $$
 
-- **Point weights** w_{u,i}: defined in §7.3.
+- **Point weights** w_i: defined in §7.3.
 - **Stop-gradient.** sg stops the gradient, so the mean is driven by MSE as
   you asked, and the spread learns from the likelihood without pulling the
   mean.
-- **Consistency term.** T_u is the label time of a point: τ in seconds, t in
-  passes. The term rewards the slope −1 that true RUL has between nearby
-  points of the same tool (pairs at most 2 passes apart). In seconds it is
-  exact even inside a pass. For F0 it applies to the fused output.
-- **Defaults:** λ_nll = 0.5, λ_vb = 0.3, λ_cons = 0.1. MSE and MAE are always
-  both reported (§10).
+- **Consistency term.** True RUL falls by exactly the operating time between
+  two points of the same unit (pairs at most 0.13·H = 200 s apart). For F0 it
+  applies to the fused output.
+- **Defaults:** λ_nll = 0.5, λ_hi = 0.3 (0 without an HI), λ_cons = 0.1. MSE
+  and MAE are always both reported (§10).
 
 ### 6.8 Regularization and augmentation (8 trajectories per fold)
 
-1. Frozen encoders, PCA (§5.9), d = 64, dropout 0.2, weight decay 0.05.
+1. Frozen encoders, a rank-16 shared projection, d = 64, dropout 0.2, weight decay 0.05.
 2. **Trajectory augmentation (the main guard against the usage shortcut).**
-   - Delete passes (probability ρ ~ U[0, ρ_max], ρ_max = 0.2) or duplicate
-     them, between pass B+1 and P* − 1. Unrecorded passes may be deleted too.
+   - Delete recordings (probability ρ ~ U[0, ρ_max], ρ_max = 0.2) or duplicate
+     them, between recording B+1 and the failure recording. Unrecorded
+     stretches may be shortened too.
    - Recompute positions, times, the TTF and every target.
    - With cached tokens this is index manipulation only. The tools then wear
-     faster or slower per pass, which breaks the link between elapsed time
+     faster or slower per recording, which breaks the link between elapsed time
      and RUL.
 3. **Modality dropout.**
    - F1: each sensing modality is dropped for the whole sequence with
-     p = 0.3, independently; all four together with p = 0.05, so the U-only
+     p = 0.3, independently; all of them together with p = 0.05, so the U-only
      state is seen.
    - F0: the same probabilities drop experts.
 4. Token dropout 0.1; Gaussian feature noise, sd 0.1 in standardized units.
-5. **Channel dropout:** each force channel's block is zeroed with p = 0.1 per
-   sequence.
+5. **Channel dropout:** each force channel is removed from the channel set with
+   p = 0.1 per sequence.
 6. Batching, optimizer, curriculum, selection and diagnostics: §7.
 
 ### 6.9 Size
 
 | Part | F1 | F0 |
 |---|---|---|
-| Projections: force 80 → 64; 3 photo types 32 → 64 | about 12 k | about 12 k |
-| Backbone(s) | about 70 k | force about 70 k + 3 photo GRUs about 20 k + U MLP about 5 k |
+| Force: shared projection 2 × 519 → 16 → 64, channel-descriptor embeddings, MLP | about 22 k | about 22 k |
+| Photos: shared projection 2 × 768 → 16 → 64, type and position embeddings, attention pooling | about 30 k | about 30 k |
+| Backbone(s) | about 70 k | signals about 70 k + one image GRU about 7 k + U MLP about 5 k |
 | Heads, gate | about 2 k | about 10 k |
-| **Trainable total** | **about 0.1 M** | **about 0.12 M** |
+| **Trainable total** | **about 0.12 M** | **about 0.14 M** |
+
+The rank-16 bottleneck plays the part PCA played: few trainable parameters for 8
+training trajectories. The projection is learned, shared and reusable.
+
+### 6.10 Designed as a reusable backbone (D17)
+
+The goal is a model that generalizes beyond Nonastreda and can serve as a
+backbone for other machining datasets. The design separates what transfers
+from what each dataset must supply.
+
+| Layer | Transfers to a new dataset? | Why |
+|---|---|---|
+| Frozen encoders (Mantis-8M, DINOv2-B) | Yes, unchanged | Pretrained on broad data; channel-independent (force) and resolution-flexible (photos) |
+| Level descriptors | Yes | Defined for any signal, in log or relative form; no machine parameters |
+| LayerNorm + shared low-rank projection, channel-set pooling, descriptor embeddings | Yes, and fine-tunable | Learned once, shared across channels and photo types. A PCA basis would be refitted per dataset and every input dimension would change meaning, so a trained backbone could not be reused |
+| Temporal fusion model (F1 or F0), relative-time bias | Yes | Reads tokens and cutting-time differences, not dataset ids |
+| Health-indicator head | When the new dataset measures an HI | A supervised readout |
+| RUL head | Reused; only the horizon H is set per dataset | RUL is always in seconds of operation |
+| **Dataset adapter** | Supplied per dataset (§6.11) | Loading, trimming, the timeline, the failure time, channel and image descriptors, the descriptor standardization, H |
+
+**Plugging in a new dataset** (for example MATWI: accelerometer, microphone,
+Fx, Fy, Fz, insert photos):
+
+1. Map its channels to descriptors.
+2. Compute the same features.
+3. Fit the adapter's descriptor standardization.
+4. Set H, then fine-tune (or freeze) the projection and backbone.
+
+Nothing in the model refers to a Nonastreda tool, pass, run, spindle speed or
+PCA basis.
+
+**The cost, stated.** PCA was a strong, free regularizer for 8 trajectories. The
+learned projection has more parameters (about 50 k against about 12 k). Its
+safeguards:
+
+- the rank-16 bottleneck;
+- dropout and weight decay;
+- phase A's dense HI supervision;
+- the projection rank in the sweep ({8, 32}).
+
+### 6.11 Core and dataset adapter (D18)
+
+**The contract.** The adapter turns a dataset into a list of units. Each unit
+gives the core:
+
+| Field | Content | Nonastreda adapter |
+|---|---|---|
+| Recordings | Operating start τ_r (s), duration D_r (s), sample rate, channels with descriptors (sensor type, axis, derivation) | Passes on the gap-aware axis (D12), causally trimmed (§5.2), duplicates attached to the latest member (D8); Fx, Fy, Fz = force × x/y/z × raw |
+| Observations | Images (type, availability time); optional health indicator (value, unit, time); optional stage labels | Tool, chip and workpiece photos after each pass, with their crop and standardization; flank wear (µm); `tool_label` |
+| Failure time τ* | Seconds of operation, or censored | The end of the confirmed TTF pass (D2) |
+| Settings | Horizon H, baseline recordings B, segment length S, model sample rate | H = 1,500 s, B = 4, S = 10 s, 1 kHz |
+
+**What stays in the adapter (Nonastreda only):**
+
+- loading the MAT and CSV files, and their verification;
+- the span-rule trim;
+- the duplicate groups and their attachment;
+- the gap-aware timeline;
+- the five TTF rules;
+- the photo crops and the workpiece standardization flag;
+- flank-wear smoothing;
+- the stage labels.
+
+**Everything else is core and dataset-agnostic:** segmentation, RUL targets and
+windows, channel magnitude, level descriptors, the encoders and caches,
+tokens, the causal baseline, F1 and F0, heads, losses, augmentation, training,
+calibration, evaluation, importance and statistics. None of them knows what a
+pass, run, block, tool photo or flank wear is.
+
+**Removed because they were Nonastreda-specific:**
+
+| Removed | Replaced by |
+|---|---|
+| RUL in passes: its head, window, MAE_eq and the single-unit control | RUL in seconds only (D6) |
+| "Completed passes" as a usage input | Operating time and seconds since the recording started |
+| The Fz_rel channel | The generic drift descriptor of every channel |
+| The ordinal wear-class head (CORAL) and oracle R2 | Nothing: they depended on Nonastreda's three classes |
+| One F0 expert per photo type | One image expert over all image types |
+| Physics features tied to the spindle (§6.2) | The generic level descriptors |
+
+**Proof of transfer (test P22).** A synthetic toy adapter runs one fold end to
+end through the unchanged core: 2 accelerometer channels at 2 kHz, one image
+type, a different H, no gaps and no duplicates.
+
+---
 
 ---
 
@@ -781,16 +909,16 @@ when each fold has only 8 training tools.
 | Supervision per fold (8 training tools) | Count | Character |
 |---|---|---|
 | RUL targets | About 3,000 prediction points, but only **8 failure events** | Points of one tool are strongly correlated; the effective sample size is closer to 8 than to 3,000 |
-| Current wear VB̃ | About 410 recorded passes, including those after the TTF | Dense, physical, comparable across tools |
+| Health indicator (here flank wear VB̃) | About 410 recorded passes, including those after the TTF | Dense, physical, comparable across tools |
 
 A flexible model can memorize 8 life curves; Project 14's first RUL model did
 so within one epoch.
 
 | # | Principle | Implemented by |
 |---|---|---|
-| P1 | Learn little; borrow most | Frozen encoders, PCA, about 0.1 M trainable parameters |
-| P2 | Dense supervision before sparse | Phase A learns wear from about 410 passes before any RUL target (§7.4) |
-| P3 | Give the model nothing that identifies a tool | No run or block codes; PCA on the training tools; equal loss weight per tool; the token mode tested in Gate 2b (Stage 2: relative tokens did not make tools harder to identify) |
+| P1 | Learn little; borrow most | Frozen encoders, a shared low-rank projection, about 0.12 M trainable parameters |
+| P2 | Dense supervision before sparse | Phase A learns the HI (here flank wear on about 410 recorded passes) before any RUL target (§7.4) |
+| P3 | Give the model nothing that identifies a tool | No run or block codes; no per-dataset fitted basis; equal loss weight per tool; the token mode tested in Gate 2b (Stage 2: relative tokens did not make tools harder to identify) |
 | P4 | Break the link between elapsed time and RUL | Trajectory augmentation (§6.8) |
 | P5 | Judge only on held-out tools | Selection on the validation tool, calibration out-of-fold, test read after the freeze (D15) |
 | P6 | Average away training noise | EMA weights, smoothed selection, seed ensembles, paired gate rules |
@@ -803,8 +931,8 @@ Each step writes into `runs/<study>/<arm>/fold-T<i>/seed-<s>/`.
 1. **Fold setup.** Read the manifest; assert that test, validation and
    training are disjoint; seed Python, NumPy and PyTorch from (fold, seed).
    Writes `config.yaml` and `signature.json`.
-2. **Transforms on the training tools:** standardization and PCA; the VB̃
-   scale. Writes `transforms.npz`.
+2. **Transforms on the training tools:** the level-descriptor standardization;
+   the VB̃ scale. Writes `transforms.npz`.
 3. **Wear readouts with cross-fitting.**
    - Validation and test tools get a ridge probe fitted on all 8 training
      tools.
@@ -817,8 +945,8 @@ Each step writes into `runs/<study>/<arm>/fold-T<i>/seed-<s>/`.
    - tokens, modality ids, availability times, masks;
    - targets y, VB̃ and the point weights.
 
-   All 10 tools fit in GPU memory at once (about 10 × 600 tokens × ≤ 80
-   features).
+   All 10 tools fit in GPU memory at once (about 10 × 600 tokens; tens of
+   megabytes of features).
 5. **Phase A, wear warm-up:** steps 1-100.
 6. **Phase B, joint training:** steps 101-500 at most, with the EMA restarted
    at step 101.
@@ -847,16 +975,16 @@ Per fold, after all seeds, `rulfuse aggregate` does four more steps:
 1. **Assemble the batch:** 8 training tools × 4 augmented copies = 32
    sequences. Each copy gets trajectory augmentation, modality dropout,
    channel dropout, token dropout and feature noise (§6.8).
-2. **Forward** through the causal model. One pass gives μ, σ, ν (both units)
-   and VB̂ at every force token: about 300-500 predictions per sequence.
-3. **Point weights** for unit u and point i of tool j:
+2. **Forward** through the causal model. One pass gives μ, σ, ν and the HI
+   nowcast at every force token: about 300-500 predictions per sequence.
+3. **Point weights** for point i of tool j:
 
-   $$w_{u,i}=\frac{v_{u,i}}{\sum_{i'\in j} v_{u,i'}},\qquad v_{u,i}=\begin{cases}1 & \mathrm{RUL}_{u,i}\le k_u\\ w_{\mathrm{far}}=0.3 & \text{otherwise.}\end{cases}$$
+   $$w_{i}=\frac{v_{i}}{\sum_{i'\in j} v_{i'}},\qquad v_{i}=\begin{cases}1 & \mathrm{RUL}_{i}\le H\\ w_{\mathrm{far}}=0.3 & \text{otherwise.}\end{cases}$$
 
    - Every tool weighs the same whatever its life length: T10 has 526
      pre-TTF points and T5 188.
    - The healthy plateau does not dominate.
-   - Points after the TTF carry only the wear loss.
+   - Points after the failure carry only the HI loss.
 4. **Loss** (§6.7) with the phase weights of §7.4.
 5. **Update.**
    - Backward; clip the gradient norm at 1.0; AdamW step; update the EMA
@@ -871,8 +999,8 @@ Cost: about 0.05-0.3 s per step on a CPU, so a fit takes 1-3 min; the pilot
 
 | Phase | Steps | Losses (weights) | Learning rate | Purpose |
 |---|---|---|---|---|
-| A: wear warm-up | 1-100 | VB 1.0 | Linear warm-up over 20 steps to the base rate | The backbone learns a tool-invariant wear state before it sees the 8 failure events |
-| B: joint | 101-500 | Per unit: MSE 1.0, consistency 0.1, NLL ramped 0 → 0.5 over steps 101-150 (mean detached). Plus VB 0.3 | Cosine, base rate → 1e-5 | RUL from the wear state and the history |
+| A: HI warm-up | 1-100 | HI 1.0 (skipped when a dataset has no HI) | Linear warm-up over 20 steps to the base rate | The backbone learns a unit-invariant health state before it sees the 8 failure events |
+| B: joint | 101-500 | MSE 1.0, consistency 0.1, NLL ramped 0 → 0.5 over steps 101-150 (mean detached); HI 0.3 | Cosine, base rate → 1e-5 | RUL from the wear state and the history |
 | C: calibration | After training | None | – | §9 |
 
 - The base learning rate is 1e-3, or the Gate-2 choice.
@@ -889,8 +1017,8 @@ Cost: about 0.05-0.3 s per step on a CPU, so a fit takes 1-3 min; the pilot
 | Defaults | Fixed in Appendix A before any run | – |
 | Gate 2a | Learning rate {3e-4, 1e-3, 3e-3} for each of F1 and F0 (Rule B within a family); then F1 against F0 at their best (Rule B) | 2 × 3 × 10 folds × 3 seeds = 180 |
 | Gate 2b | Options on the winner, no trajectory augmentation and no phase A (each by Rule A); token mode relative only or absolute only against the default both (peers, Rule B) | 4 × 30 = 120 |
-| Gate 2b control | Last recorded pass only (reported, not a decision: your specification is the full history) | 30 |
-| Sweep | One factor at a time on the winner, each by Rule A: d {32, 96}; dropout {0.1, 0.3}; PCA per photo / per channel {16/8, 64/32}; ρ_max {0.1, 0.3}; w_far {0.1, 1.0} | 10 × 30 = 300 |
+| Gate 2b control | Last recording only (reported, not a decision: your specification is the full history) | 30 |
+| Sweep | One factor at a time on the winner, each by Rule A: d {32, 96}; dropout {0.1, 0.3}; projection rank {8, 32}; ρ_max {0.1, 0.3}; w_far {0.1, 1.0} | 10 × 30 = 300 |
 
 There is no per-fold tuning: one validation tool per fold is too noisy to
 tune on (OmniFuser F4).
@@ -899,7 +1027,7 @@ tune on (OmniFuser F4).
 
 | Source of unreliability | Countermeasure |
 |---|---|
-| Seed noise | 3-seed ensembles for decisions, a 5-seed ensemble for the final model |
+| Seed noise | 3-seed ensembles for decisions and for the final model (D19) |
 | Noisy selection of one step | EMA weights; smoothed whole-life selection; patience. A fixed-step variant (no selection; the median selected step) is reported |
 | Long lives dominating the loss | Equal weight per tool |
 | The healthy plateau dominating | w_far = 0.3 |
@@ -907,16 +1035,16 @@ tune on (OmniFuser F4).
 | Tool-to-tool shift | Token mode chosen in Gate 2b; trajectory, modality and channel dropout |
 | One validation tool per fold | Decisions from 10 folds × 3 seeds with paired rules (§4.4) |
 | Calibrating on the tool used for selection | Out-of-fold calibration on the 8 training tools; the validation tool then checks coverage independently (§9) |
-| Stacking leakage of the wear readout | Cross-fitted readouts |
+| Stacking leakage of the HI readout | Cross-fitted readouts |
 
-### 7.7 Sanity checks (exit of Stage 4; laptop, physics features)
+### 7.7 Sanity checks (exit of Stage 4; laptop, cached features)
 
 | Check | Expected result | What it shows |
 |---|---|---|
-| 1. Overfit one tool, regularization off | Training MAE_eq < 0.1 within 300 steps | Plumbing and capacity |
-| 2. TTFs permuted among the training tools | Validation MAE_eq no better than B2 | No leakage path to the labels |
-| 3. Usage-only model B3 (no trajectory augmentation) | Within 0.2 passes and 20 s of B2 | The loop reproduces a known optimum |
-| 4. Oracle token: causally smoothed measured wear of the last pass as an input | Validation MAE well below B2, toward R1 | The model uses a strong signal when it exists |
+| 1. Overfit one tool, regularization off | Training MAE < 10 s within 300 steps | Plumbing and capacity |
+| 2. TTFs permuted among the training tools | Validation MAE no better than B2 | No leakage path to the labels |
+| 3. Usage-only model B3 (no trajectory augmentation) | Within 20 s of B2 | The loop reproduces a known optimum |
+| 4. Oracle token: the causally smoothed measured HI of the last recording as an input | Validation MAE well below B2, toward R1 | The model uses a strong signal when it exists |
 | 5. Synthetic trajectories: simulated wear with known RUL and noise | MAE near the noise floor; 90 % intervals cover 0.88-0.92 | Learning and uncertainty end to end |
 | 6. Truncation invariance (P11) | Identical outputs | Causality |
 | 7. The same seed twice on a CPU | Identical weights | Determinism |
@@ -931,22 +1059,20 @@ Written to `diagnostics.json` and plotted by `rulfuse report --diagnostics`.
 2. **Validation MAE against B2** on the same tool; folds that do not beat B2
    are flagged.
 3. **Usage sensitivity s_U.**
-   - Delete 20 % of the validation tool's passes *before* each evaluation
-     point, keeping the baseline run.
+   - Delete 20 % of the validation tool's recordings *before* each evaluation
+     point, keeping the baseline recordings.
    - The true RUL at that point does not change, but the elapsed time drops by
      Δ.
    - s_U = (increase of the predicted RUL) / Δ. A value of 0 means the model
      reads the sensors only; 1 means it counts time only (B1 has s_U = 1).
    - Reported for the model and for B3.
-4. **Modality reliance** during training: validation MAE_eq with each
+4. **Modality reliance** during training: validation MAE with each
    modality masked, every 50 steps.
 5. **Calibration over steps:** validation coverage of the raw intervals.
-6. **Head health:** the share of μ saturated at 0 or k_u; the share of σ at
+6. **Head health:** the share of μ saturated at 0 or H; the share of σ at
    its floor; gradient norms; F0's weights.
-7. **Seed spread:** the sd of validation MAE_eq across seeds per fold. Above
-   0.3, the regularization gets a closer look.
-8. **Unit consistency:** μ_s / μ_pass against D̄. A large disagreement means
-   one head learned a shortcut the other did not.
+7. **Seed spread:** the sd of validation MAE across seeds per fold. Above
+   30 s, the regularization gets a closer look.
 
 ### 7.9 Failure modes and responses
 
@@ -955,26 +1081,22 @@ test scores.
 
 | Symptom | Likely cause | Response |
 |---|---|---|
-| s_U near 1; predictions track B1 or B2 | Usage shortcut | ρ_max 0.3 (sweep); check the Gate-1 VB probes for force information |
-| Validation optimum within the first 30 steps of phase B while training falls | Memorizing 8 lives | Smaller d or PCA, more dropout, phase A on |
+| s_U near 1; predictions track B1 or B2 | Usage shortcut | ρ_max 0.3 (sweep); check the force probe of the Stage-3 feature check |
+| Validation optimum within the first 30 steps of phase B while training falls | Memorizing 8 lives | Smaller d or projection rank, more dropout, phase A on |
 | T5 (shortest life) predicted at the cap | Plateau dominates; few fast-wearing training tools | Lower w_far; trajectory deletion |
 | σ at its floor; coverage far below nominal | Over-confident spread | Ensemble, out-of-fold calibration |
 | Validation coverage fine, one test tool poor | That tool is unlike the others | Report it per tool |
-| F0's photo weights near 0 | Photos not informative to the model | Check the readout quality; LoRA (stretch) |
+| F0's photo weights near 0 | Photos not informative to the model | Check the readout quality (LoRA fine-tuning is a documented alternative, §6.2) |
 | NaN or exploding loss | Learning rate; the NLL too early | Clipping, the NLL ramp, the Gate-2a learning rate |
 
 ### 7.10 Optional components
 
-- **Per-fold PatchTST (encoder PT, stretch).** Masked-patch reconstruction
-  (40 % masked) on the training tools' segments only, 20 epochs, then frozen.
-- **LoRA wear fine-tuning of the photo encoder (stretch).**
-  - DINOv2-B, LoRA rank 8 on q and v; target VB̃ per photo; Huber loss.
-  - Augmentation: small shifts along the edge, ±3° rotation, mild colour
-    jitter (none for chip photos, whose tint is signal).
-  - 30 epochs, early stopping on the validation tool.
-  - Training-tool readouts cross-fitted with 4 inner folds.
-  - **Adopted only by Rule A on the full model** (the Gate-2 winner with LoRA
-    features against frozen features), not by the probe.
+None remain.
+
+- The former stretch goals, per-fold PatchTST pretraining and LoRA fine-tuning of
+  the photo encoder, moved to the documented alternatives (§6.2) with the
+  encoder simplification (D16).
+- No encoder is trained in this project.
 
 ### 7.11 How a study runs, end to end
 
@@ -995,28 +1117,27 @@ Local runs use `--local`: sequential, with threads from `rulfuse resources`.
 
 ## 8. Baselines and reference models
 
-Every table shows these, in both units.
+Every table shows these, in seconds.
 
 | ID | Model | Deployable | Purpose |
 |---|---|---|---|
-| B0 | Window-aware constant k_u/2 | No | How easy the window is (4.13 passes, 412 s) |
-| B1 | Mean training TTF − elapsed time, capped | Yes | Pure usage (5.17 passes, 513 s) |
-| B2 | E[min(TTF − t, k) \| TTF > t] over the training tools. Intervals from the empirical quantiles of min(TTF_j − t, k) over the training tools still alive at t | Yes | Best usage-only rule (3.82 passes, 468 s); the S1 and S2 reference |
+| B0 | Window-aware constant H/2 | No | How easy the window is (412 s) |
+| B1 | Mean training TTF − elapsed time, capped | Yes | Pure usage (513 s) |
+| B2 | E[min(τ* − τ, H) \| τ* > τ] over the training tools. Intervals from the empirical quantiles of min(τ*_j − τ, H) over the training tools still alive at τ | Yes | Best usage-only rule (468 s); the S1 and S2 reference |
 | B3 | Learned usage-only model: the chosen head on U features, no trajectory augmentation | Yes | A learned B2; v(∅) candidate (§11) |
-| B4 | Ridge on the physics features (absolute and tool-relative) (mean of the last 3 segments) + usage features → capped RUL | Yes | Classic tool-wear regression |
-| B5 | Photo wear readout VB̂ of the tool photos + degradation extrapolation (F5 machinery, §6.5) | Yes | "Read the photo and extrapolate" |
-| R1 | Oracle: *measured* wear, causally isotonic-smoothed, + the same extrapolation | No | Upper reference: what a perfect photo reader would give |
-| R2 | Oracle: last photo's class + residual-life table from the training tools | No | How much the class labels give |
+| B4 | Ridge on the level descriptors (absolute and relative; mean of the last 3 segments) + usage features → capped RUL | Yes | A generic condition-monitoring regression |
+| B5 | The image HI readout (here the tool photos' wear readout) + degradation extrapolation (F5 machinery, §6.5) | Yes | "Read the image and extrapolate" |
+| R1 | Oracle: the *measured* HI, causally isotonic-smoothed, + the same extrapolation | No | Upper reference: what a perfect image reader would give |
 
-**Degradation extrapolation (B5, R1).**
+**Degradation extrapolation (B5, R1)** (generic, for any dataset with an HI).
 
-- Fit VB(τ) = α + β·τ^γ (γ ≥ 1) to each training tool's smoothed wear against
-  cutting time. The prior over (α, log β, log γ) is Gaussian, fitted to the 8
-  triples.
-- At time τ, importance-weight 5,000 prior draws by the likelihood of the
-  tool's wear history (noise sd from the training residuals).
-- RUL samples = the first crossing of θ (the training tools' median VB̃ at
-  the TTF, about 112 µm) − τ, capped. Passes = seconds / D̄.
+- Fit HI(τ) = α + β·τ^γ (γ ≥ 1) to each training unit's smoothed HI against
+  operating time. The prior over (α, log β, log γ) is Gaussian, fitted to the
+  training units' triples.
+- At time τ, importance-weight 5,000 prior draws by the likelihood of the unit's
+  HI history (noise sd from the training residuals).
+- RUL samples = the first crossing of θ − τ, capped at H. θ is the training
+  units' median HI at failure (here VB̃ ≈ 112 µm).
 
 ---
 
@@ -1028,8 +1149,8 @@ Every table shows these, in both units.
      avg(σ_m² ν_m / (ν_m − 2)) + var(μ_m).
    - Its quantiles are found numerically (bisection on the mixture CDF), not
      by a Gaussian approximation.
-2. **Calibration methods** (Gate 3, Rule B), one scale *c* per unit applied
-   to every member's σ:
+2. **Calibration methods** (Gate 3, Rule B), one scale *c* applied to every
+   member's σ:
 
    | Method | Fitted on | Note |
    |---|---|---|
@@ -1038,7 +1159,7 @@ Every table shows these, in both units.
    | (c) Cross-conformal | The same out-of-fold residuals, normalized \|y − μ\|/σ; the 90 % quantile | Distribution-free under exchangeability between tools. The coverage on the test tools is measured, not assumed |
 
 3. **Causal RUL filter** (Gate 3, Rule A).
-   - A Kalman filter per unit and tool. The state is RUL; the dynamics are
+   - A Kalman filter per unit. The state is RUL; the dynamics are
      x_{j+1} = x_j − Δ_j + w_j, with Var w_j = q·Δ_j. The measurement is the
      calibrated ensemble's μ_j, with its variance.
    - q is fitted on the out-of-fold predictions.
@@ -1047,7 +1168,7 @@ Every table shows these, in both units.
    - Predictions at the cap are passed through unfiltered.
 4. **Gate 3** compares the head (Student-t, quantile) × the calibration
    method (a, b, c) by the validation Winkler score. The constraint is
-   validation coverage within [0.85, 0.95] in both units. The filter is then
+   validation coverage within [0.85, 0.95]. The filter is then
    tested by Rule A.
 
 ---
@@ -1059,21 +1180,21 @@ Every table shows these, in both units.
 - Every model predicts at every point of a tool in one causal pass. The
   truncation-invariance test proves that this equals predicting point by
   point.
-- The headline uses the k-windows. Whole-life metrics (capped targets) and
-  pass-end-only metrics come second.
+- The headline uses the window (RUL ≤ H). Whole-life metrics (capped targets)
+  and recording-end-only metrics come second.
 - Force-missing passes (D8) and the points right after T4's and T2's gaps are
   also shown separately.
 
-### 10.2 Metrics (each in seconds and in passes)
+### 10.2 Metrics (in seconds; also divided by H, to compare datasets)
 
 | Group | Metrics |
 |---|---|
-| Point | MAE, MSE, RMSE; bias (mean of ŷ − y); MAE_eq |
-| Safety | Late-prediction rate: share of points with ŷ − y > 1 pass (> 100 s). Asymmetric PHM-style score s = e^{−d/2.6} − 1 for d < 0, e^{d/2.0} − 1 for d ≥ 0, with d in pass-equivalents (seconds / 100 s) |
-| Prognostic (Saxena et al.) | α-λ accuracy: share within ±20 % of the true RUL at λ = 0.25, 0.5, 0.75 of the window. Prognostic horizon: the earliest time after which predictions stay within ±2 passes (±200 s) until failure |
+| Point | MAE, MSE, RMSE; bias (mean of ŷ − y); MAE / H |
+| Safety | Late-prediction rate: share of points with ŷ − y > H/15 (100 s). Asymmetric PHM-style score s = e^{−d/0.17} − 1 for d < 0, e^{d/0.13} − 1 for d ≥ 0, with d = (ŷ − y)/H |
+| Prognostic (Saxena et al.) | α-λ accuracy: share within ±20 % of the true RUL at λ = 0.25, 0.5, 0.75 of the window. Prognostic horizon: the earliest time after which predictions stay within ±2H/15 (±200 s) until failure |
 | Uncertainty | Coverage (PICP) and width (MPIW) at 50, 80, 90, 95 %; Winkler score; CRPS; NLL; reliability curve |
-| Stability | Monotonicity violation: mean \|Δμ + Δt\| (and \|Δμ_s + Δτ\|) between consecutive points |
-| Decision | Replace the tool when the lower 90 % bound ≤ r₀. Over a grid of r₀: missed failures (tools run past the TTF) against wasted life. Compared with fixed-schedule replacement at quantiles of the training TTFs |
+| Stability | Monotonicity violation: mean \|Δμ + Δτ\| between consecutive points |
+| Decision | Replace the unit when the lower 90 % bound ≤ r₀. Over a grid of r₀: missed failures (units run past τ*) against wasted life. Compared with fixed-schedule replacement at quantiles of the training failure times |
 
 ### 10.3 Aggregation and statistics
 
@@ -1087,12 +1208,12 @@ Every table shows these, in both units.
 - **Comparisons:** paired Wilcoxon signed-rank over the 10 test tools, Holm
   across the comparisons of one table. With n = 10, the smallest possible
   one-sided p is 0.001; the 0.05 level needs W ≤ 10.
-- **Breakdowns:** error by RUL bin (0-3, …, 12-15 passes) and by position
-  inside the pass (OmniFuser's phase-locking lesson).
+- **Breakdowns:** error by RUL bin (0-300 s, …, 1,200-1,500 s) and by position
+  inside the recording (OmniFuser's phase-locking lesson).
 
 ### 10.4 Figures
 
-1. Per tool: true RUL, predicted mean, 50 % and 90 % bands, in both units;
+1. Per tool: true RUL, predicted mean, 50 % and 90 % bands;
    the window shaded; photo labels as a strip; gaps marked.
 2. Error and coverage against true RUL.
 3. Reliability curves.
@@ -1105,18 +1226,18 @@ Every table shows these, in both units.
 
 ## 11. Modality-importance study
 
-**Players:** F (force), T (tool photo), C (chip photo), W (workpiece photo).
+**Players:** F (force), T (tool photo), C (chip photo), and W (workpiece photo) only if it passes the leakage probe. Stage 2 expects it not to: then 3 players and 7 non-empty coalitions.
 **Usage U is in every coalition** (a factory always knows the usage).
 
 ### 11.1 Retraining Shapley (primary)
 
-- Train the frozen design on each of the 15 non-empty subsets: 15 × 10 folds
-  × 3 seeds = 450 fits.
+- Train the frozen design on each non-empty subset: 7 × 10 folds × 3 seeds =
+  210 fits with 3 players (450 with 4).
 - **The empty coalition** is the better, on validation, of B2 and B3 (no
   trajectory augmentation). Trajectory augmentation deliberately destroys
   usage information, so a U-only model trained with it would understate
   v(∅) and inflate every sensing modality.
-- Value: v(S) = −k-window MAE_eq on the test tools (after the freeze, D15).
+- Value: v(S) = −window MAE (s) on the test tools (after the freeze, D15).
 
 $$
 \phi_i=\sum_{S\subseteq N\setminus\{i\}}\frac{|S|!\,(n-|S|-1)!}{n!}\,\big[v(S\cup\{i\})-v(S)\big].
@@ -1137,27 +1258,27 @@ $$
 
 ### 11.3 Time-resolved importance
 
-- **F0:** the weights α_m over the RUL horizon.
+- **F0:** the weights α_m (signals, images, usage) over the RUL horizon.
 - **F1:** integrated gradients and occlusion over history tokens. How far
   back does the model look? Does the force matter more near failure?
-- **Photo staleness:** replace the latest photos with ones 1, 2 or 3 passes
-  older (Project 14's staleness test).
+- **Image staleness:** replace the latest images with ones 1, 2 or 3
+  observations older (Project 14's staleness test).
 
 ### 11.4 Sensing without usage
 
-- A recent-window variant (last 4 recorded passes, U off) with F, with T, and
+- A recent-window variant (last 4 recordings, U off) with F, with T, and
   with all four.
 - Compared with B2. This separates what the sensors know from how long the
   tool has been used. Its usage sensitivity s_U should be near 0.
 
 ### 11.5 Force channels
 
-All five force channels are input (§5.4).
+All four force channels are input (§5.4).
 
 1. **Test-time channel masking** on the final model (trained with channel
-   dropout): the change in MAE in both units when each channel, or each pair,
+   dropout): the change in MAE when each channel, or each pair,
    is masked.
-2. **Retraining check:** the final design without Fz and Fz_rel, under the
+2. **Retraining check:** the final design without Fz, under the
    paired test. Does Fz add wear information or only drift?
 
 Reported per channel: the mean change with tool-bootstrap intervals, and its
@@ -1174,14 +1295,14 @@ Each arm reruns the frozen design, 10 folds × 3 seeds, after the freeze.
 | 1 | TTF rule | Literal first dulled; smoothed wear ≥ 110 µm |
 | 1 | Time axis | Recorded passes only; T1's leading run counted |
 | 1 | Duplicates | Attach the recording to every member |
-| 1 | Force channels | Without Fz and Fz_rel (shared with §11.5) |
+| 1 | Force channels | Without Fz (shared with §11.5) |
 | 1 | Missing modality at test time | Each modality absent; 50 % of photos missing at random (no refits) |
 | 2 | TTF rule | `tool_label` = 3; dulled from here on |
-| 2 | Horizon | k = 10; k = 20 (T5's window is then its whole life) |
+| 2 | Horizon | H = 1,000 s; H = 2,000 s (T5's window is then nearly its whole life) |
 | 2 | Duplicates | OmniFuser's deduplication |
 | 2 | Tokens | Absolute; both (only if not already settled in Gate 2b) |
 | 2 | Trimming | OmniFuser's non-causal 5 %-of-pass reference |
-| 2 | Segment length | 5 s, 20 s (new feature extraction; GPU) |
+| 2 | Segment length | 5 s, 20 s (new Mantis extraction on the laptop CPU) |
 
 Tier 1 must run. Tier 2 runs in the order listed, as time allows.
 
@@ -1204,7 +1325,7 @@ the vendored loader with OmniFuser's whenever both are present.
 | OmniFuser | `__init__.py` `_guard_windows_wmi`; `resources.py`; `tracking.py`; `model_bundle.py`; `cross_validation.py` (fold driver, summaries, pooling, resume signatures); `train.py` (interruption-safe resume) | Engineering |
 | OmniFuser | `slurm/env.sh`, `job.sbatch`, `chain.sh`, `status.sh`, `checks.sbatch`; `TRAINING_RUNBOOK_RUCHE.md` §3-§7 | §16 |
 | OmniFuser | `scripts/eda.py` (figure style), `scripts/end_to_end_trace.py` | Stage 1, documentation |
-| Project 14 | `encoders.py`: `MantisEncoder`, `MomentEncoder`, `PatchTSTEncoder`, `ASTEncoder`, `DinoV2Encoder`, `hf_revision` | §6.2 |
+| Project 14 | `encoders.py`: `MantisEncoder`, `DinoV2Encoder` (switched to `facebook/dinov2-base`), `hf_revision`; `preprocess.py`: `level_descriptors`, `slow_summary` | §6.2 |
 | Project 14 | `features.py`: `FeatureStore`, `extract_images` | §5.8 |
 | Project 14 | `metrics.py`: `student_t_nll`, `interval_scale`, `phm2012_score`; `stats.py`: `unit_bootstrap`; `losses.py` (alternatives only) | §9, §10 |
 | Project 14 | `rul.py`: `relative_to_start`; `planb.py`: `_schedule`, `_calibrate`; `gate2.py`: `_paired`, `decide` | §5.9, §8, §4.4 |
@@ -1217,13 +1338,13 @@ the vendored loader with OmniFuser's whenever both are present.
 |---|---|---|
 | L1 | Same-pass photos leak the label (OmniFuser F1) | D9, plus a test |
 | L2 | The run number is a 71 % shortcut (F2) | No run or block codes; usage explicit and switchable; B1-B3 everywhere |
-| L3 | Fz drifts (F3) | All channels input; Fz_rel; Fz's contribution measured |
+| L3 | Fz drifts (F3) | All channels input; the generic drift descriptor (change since the recording started); Fz's contribution measured |
 | L4 | One validation tool is noisy; replicates differ by up to 0.017 (F4, F14) | Smoothed whole-life selection, seed ensembles, Rule A with 7 of 10 wins |
-| L5 | The cross-tool gap (training 0.88, test 0.67), not under-fitting | Frozen encoders, PCA, trajectory augmentation, about 0.1 M parameters; token mode tested in Gate 2b |
-| L6 | Frozen ImageNet features read wear poorly; the crop helps; fine-tuning helps most | Edge crop, DINOv2 grid, wear readout; LoRA by Rule A on the full model |
+| L5 | The cross-tool gap (training 0.88, test 0.67), not under-fitting | Frozen encoders, a shared low-rank projection, trajectory augmentation, about 0.12 M parameters; token mode tested in Gate 2b |
+| L6 | Frozen ImageNet features read wear poorly; the crop helps; fine-tuning helps most | Edge crop, DINOv2-B features, wear readout; LoRA documented as an alternative |
 | L7 | Absolute embeddings plus elapsed time memorize the training units (Project 14) | Trajectory augmentation; s_U diagnostic; token mode tested in Gate 2b (in Stage 2, absolute features identified tools *less* than relative ones) |
 | L8 | Longer history did not help with 9 units (Project 14 XJTU-SY) | "Last pass only" control, reported |
-| L9 | Spectrograms of the raw force gave OmniFuser's best forecasts | Encoder SP in Gate 1 |
+| L9 | Spectrograms of the raw force gave OmniFuser's best forecasts | Documented as an alternative encoder; the level descriptors keep the force level that normalized encoders drop |
 | L10 | C2F and the image GAT gained nothing over concatenation; late fusion was hard to beat (Project 14) | Finalists F1 and F0; C2F documented as an alternative |
 | L11 | Labels are noisy and wear is non-monotone (F12) | Confirmed TTF; isotonic targets; causal smoothing for inputs; TTF sensitivity |
 | L12 | Error phase-locked to pass boundaries (OmniFuser report §6.3) | Prediction at every segment; error by position in the pass |
@@ -1232,6 +1353,9 @@ the vendored loader with OmniFuser's whenever both are present.
 | L15 | **New:** recorded passes are not the physical history (unrecorded runs) | D12, with a wear-jump check per gap |
 | L16 | **New:** whole-pass preprocessing leaks the pass length into the pass | Causal trim and time features (D14), with tests |
 | L17 | **New:** calibrating on the tool that chose the step is optimistic | Out-of-fold calibration; validation coverage as an independent check |
+| L18 | **New:** per-input normalized encoders cannot see absolute level or trend (Project 14 `preprocess.py`) | Level descriptors in every channel vector (§6.2) |
+| L19 | **New:** PCA bases and machine-specific features tie a model to one dataset | No PCA in the model; generic descriptors; channel descriptors (§6.10) |
+| L20 | **New:** passes, runs and named photo types exist only in Nonastreda | RUL in seconds; one generic core plus a small adapter (D18) |
 
 ---
 
@@ -1251,39 +1375,46 @@ the vendored loader with OmniFuser's whenever both are present.
 ```text
 RUL Model/
   pyproject.toml            package "rulfuse"; extras [test, eda, dev, encoders]
-  configs/                  data.yaml, final.yaml, gate1/, gate2/, sweep/, gate3/, shapley/, sensitivity/
+  configs/                  data/nonastreda.yaml, final.yaml, gate2/, sweep/, gate3/, shapley/, sensitivity/
   rulfuse/
     __init__.py             WMI guard (vendored)
     config.py               dataclasses; YAML I/O; signature()
-    data/
-      nonastreda.py         vendored loader; all 512 passes; duplicate groups; chip/work paths
-      trim.py               causal span rule (and OmniFuser's, for the sensitivity arm)
-      timeline.py           gap-aware axis, D8 attachment, availability times
-      segments.py           10 s segmentation, segment store
-      labels.py             5 TTF rules, RUL (passes, s), caps, masks, isotonic wear (full, causal)
-      images.py             crops, resizing, ImageBank (vendored)
-      folds.py              leave_one_tool_out_folds (vendored), manifests
+    core/                   dataset-agnostic (D18): never imports rulfuse.adapters
+      schema.py             Unit, Recording, Channel (descriptors), Observation, failure time, settings
+      segments.py           S-second segmentation, the segment store
+      targets.py            RUL in seconds, cap H, windows, masks
+      channels.py           magnitude of 3-axis groups; the 7 level descriptors
+      normalization.py      descriptor standardization, causal baseline (Scaler/PCA kept for B4 and analysis)
+      folds.py              leave-one-unit-out with the next unit as validation
+    adapters/
+      nonastreda/           everything Nonastreda-specific
+        load.py             MAT/CSV loading, verification, duplicate groups (vendored OmniFuser checks)
+        trim.py             causal span rule (and OmniFuser's, for the sensitivity arm)
+        timeline.py         gap-aware axis, D8 attachment, photo availability
+        failure.py          the 5 TTF rules -> failure time; flank-wear HI; stage labels
+        images.py           image types: tool crop, chip, workpiece standardization
+      toy/                  synthetic adapter for the transfer-contract test (P22)
     features/
-      physics.py            handcrafted force and image features
-      encoders.py           vendored Project 14 wrappers + Chronos, SigLIP 2, DINOv3
+      encoders.py           Mantis-8M and DINOv2-B wrappers (vendored from Project 14)
       cache.py              FeatureStore (vendored), signatures
-      probe.py              Gate-1 ridge probes, cross-fitted wear readouts
+      probe.py              feature check, cross-fitted HI readouts, leakage probe
     models/
-      tokens.py             PCA, causal baseline, projections, embeddings, relative-time bias
-      fusion.py             F1 token fusion, F0 experts + gPoE
-      heads.py              dual-unit Student-t, quantile, wear, CORAL
-    degradation.py          extrapolation used by B5 and R1
+      tokens.py             LayerNorm, low-rank projections, channel-set pooling, descriptor and
+                            time embeddings, causal baseline, relative-time bias
+      fusion.py             F1 token fusion, F0 experts (usage, signals, images) + gPoE
+      heads.py              Student-t RUL (s), quantile, HI nowcast
+    degradation.py          HI extrapolation used by B5 and R1
     augment.py              trajectory augmentation, modality, channel and token dropout
     losses.py
     train.py                fit one (fold, seed): phases, EMA, selection, resume
     uncertainty.py          mixture, calibration (a, b, c), Kalman filter
-    baselines.py            B0-B5, R1, R2
+    baselines.py            B0-B5, R1
     evaluation.py           §10 metrics
     importance.py           Shapley (retraining, masking), staleness, IG/occlusion, channels
     stats.py                bootstrap, Wilcoxon + Holm (vendored)
     cross_validation.py     driver, aggregation, test-score seal (§4.6)
     tracking.py, resources.py, bundle.py   (vendored)
-    cli.py                  rulfuse <command>
+    cli.py                  rulfuse <command> --dataset nonastreda
   scripts/                  eda_rul.py, end_to_end_trace.py, make_figures.py
   slurm/                    env.sh, job.sbatch, cpu.sbatch, array.sbatch, chain.sh, status.sh,
                             checks.sbatch, prefetch_weights.sh
@@ -1291,20 +1422,23 @@ RUL Model/
   docs/                     EDA_RUL.md, END_TO_END.md, RUCHE_RUNBOOK.md, RESULTS.md, archive/
 ```
 
+The Stage 0-2 modules (`rulfuse/data/*`) move into this layout in Stage 3
+(§17.2). Their tests move with them and must stay green.
+
 ### 14.3 Commands
 
 ```bash
 rulfuse verify-data   --raw $RULFUSE_DATA_ROOT/raw              # hashes, counts, groups, gaps
 rulfuse build-store   --config configs/data.yaml               # trim, timeline, segments, labels
-rulfuse features      --modality force --encoder mantis --device cuda
-rulfuse probe         --gate 1 --out runs/gate1                 # encoders, derived channels
+rulfuse features      --modality force                          # Mantis-8M, laptop CPU
+rulfuse feature-check --out runs/feature-check                  # go/no-go, readouts, leakage
 rulfuse baselines     --out runs/baselines
 rulfuse manifest      --study gate2a && sbatch --array=0-59%4 slurm/array.sbatch runs/gate2a/manifest.tsv
 rulfuse aggregate     --study gate2a                            # ensembles, calibration, decision.json
 rulfuse freeze        --config configs/final.yaml              # D15; records the hash
 rulfuse aggregate     --study final --after-freeze
 rulfuse report        --runs runs/final runs/baselines runs/shapley runs/sensitivity --out runs/report
-rulfuse predict       --model runs/final/fold-T3 --tool T3      # 5-seed ensemble
+rulfuse predict       --model runs/final/fold-T3 --tool T3      # 3-seed ensemble
 ```
 
 ### 14.4 Outputs of every fit
@@ -1313,7 +1447,7 @@ rulfuse predict       --model runs/final/fold-T3 --tool T3      # 5-seed ensembl
 |---|---|
 | `config.yaml`, `signature.json` | Resolved configuration; data and feature signatures |
 | `metrics.jsonl` | Per evaluation step |
-| `predictions.parquet` | Per point: tool, pass, segment, τ, label time; per unit y, RUL, μ, σ, ν, quantiles; F0's experts and weights; masks; `split` (test rows sealed before the freeze) |
+| `predictions.parquet` | Per point: unit, recording, segment, τ; y, RUL (s), μ, σ, ν, quantiles; F0's experts and weights; masks; `split` (test rows sealed before the freeze) |
 | `selection.json`, `diagnostics.json` | §7.2, §7.8 |
 | `model.pt`, `DONE` | Weights; completion marker |
 
@@ -1347,23 +1481,24 @@ A part is done only when all three pass.
 | **P2 Causal trim** | Reference uses the future; real cutting cut away | Idle lead-in, ramp and spike passes give the expected bounds; the start is unchanged when the pass is truncated after 6 s | Start index within 200 samples of OmniFuser's on ≥ 95 % of passes; plots of every disagreement | The 4 flagged passes of `EDA.md` §5 behave as documented | ≥ 95 % agreement; disagreements reviewed |
 | **P3 Timeline** | Gaps miscounted; wrong duplicate attachment; wrong durations | Synthetic tool with an interior gap, a leading gap and a duplicate group: positions, `force_present`, durations, τ monotone; the leading gap is not counted | T2 +4 and T4 +16 unrecorded passes; 134 force-missing passes, ≥ 127 of them block 3; photo availability = end of its pass | Wear jump across each gap / per-run wear rate ≈ gap length in runs (T4 5.6, T2 1.6; `EDA_RUL.md`) | Counts exact; jump ratios documented |
 | **P4 Segmentation** | Lost or double-counted samples; boundaries that depend on the future | Remainder rule; segments tile the trimmed pass exactly; sub-windows cover every sample; boundaries depend only on samples already seen | 3,747 pre-TTF points; per-tool counts of §2.2 | – | Exact |
-| **P5 Labels** | Wrong TTF; RUL arithmetic; caps; a TTF inside a gap | Each rule on hand-made sequences (flips, ties, sequence end); RUL in both units; caps and masks; isotonic non-decreasing; causal isotonic uses only the past | The TTF table of §2.3 and the windows of §2.2 exactly | Smoothed wear at the TTF in 109-123 µm for every tool | Exact |
+| **P5 Labels** | Wrong TTF; RUL arithmetic; caps; a TTF inside a gap | Each rule on hand-made sequences (flips, ties, sequence end); RUL in seconds; caps and masks; isotonic non-decreasing; causal isotonic uses only the past | The TTF table of §2.3 and the windows of §2.2 exactly | Smoothed wear at the TTF in 109-123 µm for every tool | Exact |
 | **P6 Folds** | Tool in two roles | Disjoint; cyclic; each tool tested once | – | – | Exact |
 | **P7 Normalization** | Statistics from validation or test tools; non-causal baseline | Poison test: extreme values in validation and test tools leave the scalers and PCA unchanged; perturbing later segments leaves b_u(t) unchanged | – | Reported, not a gate: the test tool's shift and the tool identifiability for absolute against relative features (Stage 2: shift 0.31 against 0.35 sd; identification 23 % against 35 %, so the premise was not confirmed beyond static offsets; the token mode moved to Gate 2b) | Poison and causality tests pass |
-| **P8 Encoders and caches** | Wrong checkpoint; non-determinism; mixed caches | Shapes; same input → same output; the signature changes with checkpoint or preprocessing; a cache with a foreign signature is refused | Offline loading on Ruche (J0); duplicated recordings → identical embeddings; laptop vs Ruche embeddings of 20 segments agree within 1e-3 relative | – | All pass |
-| **P9 Gate-1 probes and readouts** | Probe leakage; in-sample readouts; photo features that encode the stage label | Ridge recovers known coefficients; a cross-fitted readout of a tool never uses that tool's labels; PCA fitted on training only | Readout MAE on held-out tools reported per photo type | The H probe beats the training-mean VB predictor; shuffling VB within training tools collapses the probe to the mean | Leakage tests pass; H beats the mean; stage-step leakage probe: a stage boundary is the largest run-boundary step in ≤ 3 of 10 tools (`rulfuse.audit`) |
-| **P10 Tokens and time** | D_p or the future reaching an input | Usage features at (p, s) do not change when D_p or later samples change; photo tokens sit after their pass's last segment; the relative bias depends only on Δτ | Spot-check of 20 random points against the timeline table | – | All pass |
+| **P8 Encoders and caches** | Wrong checkpoint; non-determinism; mixed caches; a lost force level | Shapes; same input → same output; the signature changes with checkpoint or preprocessing; a cache with a foreign signature is refused; descriptors on synthetic signals (known RMS, kurtosis, slope) | Duplicated recordings → identical embeddings; the Mantis scale check (a window and its 2× copy); offline loading on Ruche (J0) | Descriptors carry the level when Mantis does not | All pass |
+| **P9 Feature check, readouts and leakage probe** | Probe leakage; in-sample readouts; photo features that encode the stage label | Ridge recovers known coefficients; a cross-fitted readout of a tool never uses that tool's labels; PCA fitted on training only | Readout MAE on held-out tools reported per photo type | Force (Mantis + descriptors) and each kept photo type beat the training-mean VB predictor; shuffling VB within training tools collapses the probe to the mean | Leakage tests pass; H beats the mean; stage-step leakage probe: a stage boundary is the largest run-boundary step in ≤ 3 of 10 tools (`rulfuse.audit`) |
+| **P10 Tokens and time** | D_p or the future reaching an input | Usage features at (r, s) do not change when the recording's later samples or its total duration change; image tokens sit at their availability time; the relative bias depends only on Δτ | Spot-check of 20 random points against the timeline table | – | All pass |
 | **P11 Models F1, F0** | Look-ahead; mask bugs; expert bugs | **Truncation invariance** (outputs at t unchanged when later tokens are removed or replaced by noise); **no photo leak** (changing pass *p*'s photo changes nothing up to the end of pass *p*); missing-modality masks; gPoE with one expert equals that expert; F0 with all sensing masked equals the U expert; tiny overfit | – | Sanity checks 1, 4, 6 (§7.7) | All pass |
-| **P12 Heads and losses** | Range errors; NLL moving μ; unit imbalance | μ within [0, k_u]; ν ≥ 3; the NLL gradient never reaches μ; consistency loss 0 for slope −1; both heads receive gradient; per-unit scaling by k_u | – | On synthetic Student-t data the head recovers σ within 10 % | All pass |
+| **P12 Heads and losses** | Range errors; NLL moving μ; unit imbalance | μ within [0, H]; ν ≥ 3; the NLL gradient never reaches μ; consistency loss 0 for slope −1; scaling by H | – | On synthetic Student-t data the head recovers σ within 10 % | All pass |
 | **P13 Augmentation** | Corrupted labels; photos detached | Trajectory augmentation keeps the TTF pass, recomputes targets, never touches the baseline passes, keeps photos and wear on their passes; dropout rates match configuration; channel dropout zeroes the right block | Histogram of augmented TTFs (wider than the real 19-47) | Usage sensitivity s_U falls with trajectory augmentation on (Gate 2b) | Tests pass; s_U reported |
 | **P14 Training loop** | Selection bugs; non-resumable; non-deterministic | Phase schedule; EMA restart at step 101; selection picks the smoothed minimum; resume after a kill gives identical weights; same seed → same weights on CPU | – | Sanity checks 2, 3, 5, 7; learning curves without the memorization warning | All pass |
 | **P15 Ensemble, calibration, filter** | Wrong mixture; leaky calibration; non-causal filter | Mixture moments and quantiles against Monte Carlo; the scale reaches the target coverage on synthetic data; inner folds never contain the outer validation or test tool; conformal coverage on exchangeable synthetic data; the filter on a synthetic linear-decreasing truth lowers the error and is causal | – | Out-of-fold calibration: validation coverage within [0.85, 0.95], checked before any test score | All pass |
-| **P16 Baselines** | Formula or protocol errors | B2 on a toy case equals a hand computation; B5 and R1 extrapolation on a synthetic power-law tool recover its crossing | B0-B2 reproduce §2.7 (4.13 / 5.17 / 3.82 passes; 412 / 513 / 468 s) | R1 beats every deployable model. If it does not, the extrapolation is broken | Exact; R1 best |
+| **P16 Baselines** | Formula or protocol errors | B2 on a toy case equals a hand computation; B5 and R1 extrapolation on a synthetic power-law tool recover its crossing | B0-B2 reproduce §2.7 (412 / 513 / 468 s) | R1 beats every deployable model. If it does not, the extrapolation is broken | Exact; R1 best |
 | **P17 Metrics and statistics** | Wrong formulas | Every metric against hand-computed values; Student-t CRPS against Monte Carlo; Wilcoxon and Holm against SciPy; bootstrap reproducible by seed | – | – | Exact |
 | **P18 Importance** | Shapley errors; unfair v(∅) | A synthetic additive game recovers its values; efficiency Σφ = v(N) − v(∅); in an additive synthetic model, masking ≈ retraining | – | The signs of retraining and masking agree for the top modality; a sensing-only model's s_U is near 0 | All pass |
 | **P19 Sensitivity configs** | An arm silently equal to the default | Each arm's config changes exactly the intended field; label arms produce the TTFs of §2.3 | – | – | Exact |
-| **P20 Ruche pipeline** | Lost or duplicated fits; offline failures | Manifest generation; `DONE` skip; resume after a simulated kill; `status.sh` parsing on a fake tree | J0 checks; pilot J1; one fold on the laptop and on Ruche: same MAE_eq within 1e-3 relative (CPU equal, GPU tolerance) | – | All pass |
+| **P20 Ruche pipeline** | Lost or duplicated fits; offline failures | Manifest generation; `DONE` skip; resume after a simulated kill; `status.sh` parsing on a fake tree | J0 checks; pilot J1; one fold on the laptop and on Ruche: same MAE within 1e-3 relative (CPU equal, GPU tolerance) | – | All pass |
 | **P21 Report** | Numbers not reproducible | Golden-file test: a tiny synthetic run's report equals the stored one | Deleting `runs/report` and rerunning gives identical tables (hash) | – | Identical |
+| **P22 Transfer contract** | Nonastreda leaking into the core | `rulfuse.core`, `features` and `models` import nothing from `rulfuse.adapters` (an import-graph test); a synthetic toy adapter (2 accelerometer channels at 2 kHz, one image type, H = 600 s, no gaps or duplicates) runs one fold end to end | The Nonastreda adapter's output validates against the schema | – | Passes without any core change |
 
 ### 15.2 Test files
 
@@ -1390,6 +1525,7 @@ A part is done only when all three pass.
 | `test_configs.py` | P19 |
 | `test_slurm.py` | P20 |
 | `test_report.py` | P21 |
+| `test_schema.py`, `test_transfer_contract.py` | P22 |
 
 ---
 
@@ -1399,10 +1535,9 @@ A part is done only when all three pass.
 
 | Work | Where |
 |---|---|
-| Development, tests, stores, physics features, Gate 1, baselines, sanity checks | **Laptop CPU**: check idle CPU first (`rulfuse resources`) |
-| Pretrained encoder features | Ruche `gpua100` |
+| Development, tests, stores, all feature extraction, the feature check, baselines, sanity checks | **Laptop CPU**: check idle CPU first (`rulfuse resources`) |
+| Pretrained encoder features (Mantis-8M, DINOv2-B) | **Laptop CPU**, once (minutes for Mantis, about 30 min for DINOv2-B) |
 | Fit arrays (Gates 2-3, sweep, final, Shapley, sensitivity) | Ruche `gpua100`, or a CPU partition if the queue is long (the models are small) |
-| LoRA (stretch) | Ruche `gpua100` |
 | Aggregation and report | Laptop or `cpu_short` |
 
 ### 16.2 One-time setup
@@ -1425,8 +1560,9 @@ Follows OmniFuser's `TRAINING_RUNBOOK_RUCHE.md` §3-§7.
    - sets `RULFUSE_DATA_ROOT=$WORKDIR/rul_data` and
      `HF_HOME=$WORKDIR/hf_cache`;
    - sets `HF_HUB_OFFLINE=1` inside jobs, and `PYTHONUNBUFFERED=1`.
-4. `bash slurm/prefetch_weights.sh` **on the login node**. DINOv3 needs its
-   licence accepted first.
+4. `bash slurm/prefetch_weights.sh` **on the login node** (Mantis-8M and
+   DINOv2-B). These are needed only if features are ever re-extracted on Ruche;
+   normally the laptop's caches are copied.
 5. Data: `tar` the raw copy (about 1.3 GB); `scp` it to `/workdir/<login>/`;
    run `rulfuse verify-data` (P1).
 6. Code: a git clone on a `ruche` branch (§19), or a tarball (OmniFuser
@@ -1449,22 +1585,19 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 
 | Job | Stage | Content | Tasks | Fits | Estimate |
 |---|---|---|---|---|---|
-| J0 | 3 | Checks: tests, offline weights, GPU | 2 | – | 15 min |
-| J1 | 3 | Pilot: one fold, F1 on physics features | 1 | 3 | 30 min |
-| J2 | 3 | Store on Ruche; signature equal to the laptop's | 1 | – | 15 min |
-| J3 | 3 | Force features: MA, MO-base, MO-large, CH, AST, SP | 6 | – | 2-4 GPU-h |
-| J4 | 3 | Photo features: EB0, D2-S/B, SG2, (D3) × 3 photo types | 5 | – | 1-2 GPU-h |
+| J0 | 4 | Checks: tests, offline weights, GPU | 2 | – | 15 min |
+| J1 | 4 | Pilot: one fold, F1 on the cached features | 1 | 3 | 30 min |
+| J2 | 4 | Store and feature caches on Ruche; signatures equal to the laptop's | 1 | – | 15 min |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds | 60 | 180 | 4-5 GPU-h |
 | J6 | 5 | Gate 2b: 4 options + 1 control × 10 folds | 50 | 150 | 4 GPU-h |
 | J7 | 5 | Sweep: 10 variants × 10 folds | 100 | 300 | 7-8 GPU-h |
 | J8 | 6 | Gate 3: 2 heads × 10 folds, each with 4 inner fits per seed | 20 | 300 | 7-8 GPU-h |
-| J9 | 6 | LoRA (stretch): 10 folds × 3 photo types × (1 + 4 inner) | 30 | 150 fine-tunes | 10-12 GPU-h |
-| J10 | 7 | Final: 10 folds × 5 seeds + 4 inner fits each | 10 | 250 | 6 GPU-h |
-| J11 | 8 | Shapley: 15 coalitions × 10 folds | 150 | 450 | 11 GPU-h |
+| J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each | 10 | 150 | 3.5 GPU-h |
+| J11 | 8 | Shapley: 7 coalitions × 10 folds (15 if the workpiece passes) | 70 (150) | 210 (450) | 5 (11) GPU-h |
 | J12 | 8 | Sensitivity tier 1 (5 refit arms) / tier 2 (up to 9 arms + features) | 50 / 90 | 150 / 270 | 4 / 8 GPU-h |
 | J13 | 9 | Report | 1 | – | 15 min |
 
-The total is about 65-80 A100-hours. Submit arrays in the evening; run
+The total is about 40-50 A100-hours (no feature jobs: the features come from the laptop). Submit arrays in the evening; run
 `status.sh` each morning.
 
 ### 16.5 Safe practice
@@ -1488,7 +1621,7 @@ The total is about 65-80 A100-hours. Submit arrays in the evening; run
 S0 Foundations    ███
 S1 Data audit      █████
 S2 Data pipeline    ███████
-S3 Features, G1         ████████
+S3 Features, check      █████
 S4 Training engine        ████████
 S5 Fusion, G2                   ████████
 S6 Uncertainty, G3                    ████████ ◆ freeze Dec 1
@@ -1500,15 +1633,14 @@ S9 Report                                            ████████
 **Critical path:** S0 → S2 → S4 → S5 → S6 → S7 → S8 → S9.
 
 - S1 must settle the time axis (D12) before S2's labels are final.
-- S3 (GPU features) runs beside S4 (laptop), and must finish Gate 1 before
-  S5 starts.
+- S3 (laptop features and the feature check) runs beside S4 and must finish
+  before S5 starts. It no longer needs Ruche.
 
 **Minimum viable result**, if time runs short: S0-S4, then F1 only in S5, then
 the Student-t head with out-of-fold calibration in S6, then S7 and Shapley
 (S8).
 
-**Drop order:** tier-2 sensitivity → LoRA → the sweep → F0 → the quantile
-head.
+**Drop order:** tier-2 sensitivity → the sweep → F0 → the quantile head.
 
 ### 17.2 Stage by stage
 
@@ -1541,7 +1673,7 @@ head.
   - per-tool wear curves with TTF and gaps marked;
   - force indicators (relative RMS, band energy) and photo statistics against
     RUL;
-  - B0-B2 in both units;
+  - B0-B2;
   - pass-duration differences (T9, T10).
 - **Outputs:** `EDA_RUL.md` and its figures; the §2 numbers regenerated by
   script.
@@ -1559,19 +1691,29 @@ head.
 - **Verification:** P3-P7.
 - **Exit:** P3-P7 accepted; the store signature recorded.
 
-#### Stage 3: Features, Ruche bring-up and Gate 1 (Tue Nov 10 to Tue Nov 17)
+#### Stage 3: Core/adapter refactor, features and the feature check (Tue Nov 10 to Sat Nov 14)
 
-- **Goal:** cached features for every candidate encoder, and one encoder per
-  modality.
+- **Goal:** a dataset-agnostic core behind a Nonastreda adapter; cached Mantis-8M and DINOv2-B features, checked and leak-tested.
+  No encoder comparison and no Ruche.
 - **Tasks:**
-  - physics and handcrafted image features (laptop);
-  - the encoder wrappers and the feature cache;
-  - Ruche setup and jobs J0-J4;
-  - the Gate-1 probes, the derived-channel decision, and the cross-fitted
-    readouts (laptop).
-- **Outputs:** `interim/features/*`; `runs/gate1/decision.json`.
-- **Verification:** P8, P9.
-- **Exit:** decisions 1-5 logged (§17.3).
+  - the core/adapter refactor of the Stage 0-2 code (D18): the generic
+    schema, `rulfuse/adapters/nonastreda/`, the toy adapter and the
+    transfer-contract test (P22). The existing tests move along and stay green;
+  - the `encoders` extra (CPU torch, transformers, mantis-tsfm);
+  - the vendored Mantis-8M and DINOv2-B wrappers;
+  - the level descriptors (Project 14's `level_descriptors` and
+    `slow_summary`);
+  - the feature caches, run on the laptop at low priority: 3,777 × 4 channel
+    vectors and 1,536 photos;
+  - the full handcrafted set H, for baseline B4;
+  - the feature check of §6.2: scale check, go/no-go, cross-fitted readouts,
+    leakage probe.
+- **Outputs:** `interim/features/force-mantis8m-<sig>/`,
+  `interim/features/photo-dinov2b-<sig>/`, `runs/feature-check/report.json`.
+- **Verification:** P8, P9, P22.
+- **Exit:**
+  - force is a go (otherwise the MOMENT-1-base fallback is logged and run);
+  - the photo types are fixed by the leakage probe (decision 1, §17.3).
 
 #### Stage 4: Training engine and sanity checks (Thu Nov 12 to Thu Nov 19)
 
@@ -1581,7 +1723,8 @@ head.
     augmentation, `train.py`;
   - `uncertainty.py` (mixture, calibration (a)-(c), the filter);
   - `baselines.py`, `degradation.py`, `evaluation.py`, `stats.py`;
-  - the diagnostics; the seven sanity checks on physics features (laptop).
+  - the diagnostics; the seven sanity checks (laptop);
+  - Ruche setup and jobs J0-J2 (checks, pilot, store and caches).
 - **Outputs:** sanity-check report in `PROJECT_LOG.md`; baselines in
   `runs/baselines`.
 - **Verification:** P10-P17.
@@ -1600,21 +1743,47 @@ head.
   - the diagnostics of every fit are reviewed: no memorization warnings left
     unexplained;
   - s_U reported;
-  - the validation MAE_eq of the winner below B2's on validation.
-- **Exit:** decisions 6-12 logged.
+  - the validation MAE of the winner below B2's on validation.
+- **Exit:** decisions 2-7 logged.
 
 #### Stage 6: Uncertainty, Gate 3 and design freeze (Tue Nov 24 to Tue Dec 1)
 
+**In plain words.** By Stage 6 the model already predicts how long a tool has
+left. Stage 6 makes its "give or take" trustworthy, then locks the design.
+
+1. **Each prediction comes with a range.** The model outputs a most likely value
+   and a spread, for example "≈ 640 s, 90 % between 420 and 900 s".
+2. **Three copies vote.** The final model is trained 3 times with different random
+   starts. Where the copies disagree, the range widens: the model is less sure.
+3. **Check the ranges against reality.** A 90 % range must contain the true
+   remaining life 90 % of the time, like a weather forecast whose "70 % chance
+   of rain" days are rainy 70 % of the time.
+   - The check uses tools the model did not train on: the 8 training tools
+     through 4 extra inner trainings (each leaves 2 tools out), with the
+     validation tool as an independent second check.
+   - The test tool is never used.
+4. **Stretch or shrink.** If the ranges are too narrow (say 70 % instead of
+   90 %), one factor widens all of them until they are right, and likewise if
+   they are too wide.
+5. **Pick the best way to do it.** Two output types (a Student-t spread, or
+   seven quantiles) and three ways of fitting the factor are compared, and the
+   most accurate ranges on the validation tools win. An optional smoother then
+   enforces what real remaining life does: it falls by exactly the time spent
+   cutting.
+6. **Freeze.** The chosen design is written to `configs/final.yaml`, its hash is
+   recorded, and from then on nothing changes before the test scores are read.
+
+**In detail.**
+
 - **Goal:** calibrated intervals and a frozen design.
 - **Tasks:**
-  - J8 (heads × calibration methods with inner fits);
-  - the filter by Rule A;
-  - LoRA (J9) only if Stage 5 ended on time;
+  - J8 (heads × calibration methods, with the inner fits);
+  - the filter, by Rule A;
   - write `configs/final.yaml`; `rulfuse freeze`.
 - **Outputs:** `runs/gate3`; the frozen configuration and its hash.
-- **Verification:** P15 scientific check (validation coverage in band, both
+- **Verification:** the P15 scientific check (validation coverage in band, both
   units); reliability curves on validation.
-- **Exit:** decisions 13-16 logged; freeze recorded (D15). **No test score has
+- **Exit:** decisions 8-10 logged; freeze recorded (D15). **No test score has
   been read up to here.**
 
 #### Stage 7: Final runs and headline (Wed Dec 2 to Fri Dec 4)
@@ -1657,20 +1826,19 @@ Each decision is appended to `PROJECT_LOG.md` with its numbers.
 
 | # | Decision | Gate | Rule |
 |---|---|---|---|
-| 1-4 | Encoder for force, tool, chip, workpiece | 1 | B (VB MAE) |
-| 5 | Derived force channels (Fz_rel, \|F\|) | 1 | A |
-| 6 | Learning rate of F1; of F0 | 2a | B |
-| 7 | Fusion family (F1 or F0) | 2a | B |
-| 8 | Trajectory augmentation | 2b | A |
-| 9 | Phase-A warm-up | 2b | A |
-| 10 | Token mode (relative, absolute, both) | 2b | B (peers, after the Stage-2 evidence) |
-| 11 | Sweep adoptions (each factor) | Sweep | A |
-| 12 | (Control) last pass only | 2b | Reported, not decided |
-| 13 | Head (Student-t or quantile) | 3 | B |
-| 14 | Calibration method (a, b, c) | 3 | B |
-| 15 | Causal RUL filter | 3 | A |
-| 16 | LoRA (if run) | 3 | A, on the full model |
-| 17 | Photo types that pass the stage-step leakage probe | 1 | Probe: a stage boundary is the largest run-boundary step in ≤ 3 of 10 tools |
+| 1 | Photo types that pass the stage-step leakage probe | Stage-3 feature check | A stage boundary is the largest run-boundary step in ≤ 3 of 10 tools |
+| 2 | Learning rate of F1; of F0 | 2a | B |
+| 3 | Fusion family (F1 or F0) | 2a | B |
+| 4 | Trajectory augmentation | 2b | A |
+| 5 | Phase-A warm-up | 2b | A |
+| 6 | Token mode (relative, absolute, both) | 2b | B (peers, after the Stage-2 evidence) |
+| 7 | Sweep adoptions (each factor, including the projection rank) | Sweep | A |
+| – | (Control) last pass only | 2b | Reported, not decided |
+| 8 | Head (Student-t or quantile) | 3 | B |
+| 9 | Calibration method (a, b, c) | 3 | B |
+| 10 | Causal RUL filter | 3 | A |
+
+No encoder, derived-channel or LoRA decision remains (D16, D17).
 
 ---
 
@@ -1680,14 +1848,14 @@ Each decision is appended to `PROJECT_LOG.md` with its numbers.
 |---|---|---|
 | 10 tools give wide intervals; gaps between models are not significant | High | Paired tests; effect sizes with intervals; few pre-registered comparisons; both summaries |
 | The model leans on usage and adds little over B2 | Medium-high | Trajectory augmentation; s_U diagnostic; B2 and B3 everywhere; sensing-only study |
-| The force carries little RUL information (Project 14: flat force pathway) | Medium | Physics features and spectrograms in Gate 1; both token halves; the channel study |
-| Photo features stay weak | Medium | Crop, DINOv2 grid, wear readout; LoRA; the chip photo as a second visual cue |
+| The force carries little RUL information (Project 14: flat force pathway) | Medium | Level descriptors with the Mantis embedding; both token halves; the channel study; the MOMENT fallback |
+| Photo features stay weak | Medium | Crop, DINOv2-B features, wear readout; the chip photo as a second visual cue; LoRA documented as an alternative |
 | The gap-aware axis is wrong (the runs were not cut) | Low (you confirmed it; the wear jumps agree) | The recorded-axis arm (tier 1) |
 | T4's thin window (20 points) and T5's short life | High | Whole-life selection; both summaries; per-tool reporting |
 | Label noise near the TTF (T3, T5) | Medium | Confirmed rule; TTF sensitivity arms |
 | Out-of-fold calibration misses tool-specific spread | Medium | Validation coverage checked before the freeze; per-tool coverage reported |
 | The 6-week scope slips | Medium | Minimum viable result and drop order (§17.1) |
-| Ruche queue or gated checkpoints | Low-medium | CPU partitions; DINOv3 optional; prefetch in Stage 3 |
+| Ruche queue | Low-medium | CPU partitions; features need no Ruche; no gated checkpoint is used |
 | A causality bug | Low after tests | P10, P11 tests; oracle and permutation checks |
 | OneDrive locking or syncing data files | Medium if ignored | Data root on `D:` (§14.1) |
 
@@ -1705,7 +1873,7 @@ Each has a default that the plan assumes until you answer.
    step exactly when `tool_label` changes stage, in every tool
    (`docs/EDA_RUL.md` §6). *Answered 2026-11-04: the paper does not describe a
    change per stage.* The cause stays unknown, so the default stands:
-   per-image standardization plus the Gate-1 leakage probe, and exclusion if
+   per-image standardization plus the Stage-3 leakage probe, and exclusion if
    the probe fails.
 2. **Commits.** Should I commit to a new private GitHub repository, or will
    you commit personally, as in Project 14? *Default: changes left
@@ -1717,8 +1885,8 @@ Each has a default that the plan assumes until you answer.
 5. **Usage in the headline model.** Elapsed cutting time is an input (a
    factory knows it); the sensing-only result is reported separately.
    *Default: yes.*
-6. **LoRA** as a stretch goal in Stage 6. *Default: only if Stage 5 ends on
-   time.*
+6. **LoRA**: withdrawn (2026-11-04). With the fixed encoders (D16) it became
+   a documented alternative.
 7. **Deliverables:** a report only, or slides too? *Default: report and
    figures; slides optional.*
 
@@ -1730,27 +1898,28 @@ Each has a default that the plan assumes until you answer.
 |---|---|---|
 | TTF rule | Confirmed first dulled (dulled, then ≥ 2 dulled among the next 3 recorded) | D2 |
 | Time axis | Gap-aware; interior gaps counted at the tool's median pass duration; leading gaps not | D12 |
-| Windows and caps | 15 passes; 1,500 s | D3, §3.2 |
-| Selection and gate metric | MAE_eq = ½ (MAE_pass + MAE_sec / 100 s) | §4.3 |
+| Horizon (cap and window) | H = 1,500 s of cutting (a dataset setting) | D3, §3.2 |
+| Selection and gate metric | MAE in seconds (whole life with the loss weights for selection; window for gates) | §4.3 |
 | Segment | 10 s from the causally trimmed start, remainder < 5 s merged | D7, §5.2 |
 | Trim reference | Median envelope over the first 5 s | §5.2 |
-| Channels | Fx, Fy, Fz (always) + Fz_rel, \|F\| (Gate 1); PCA 8 absolute + 8 relative per channel | §5.4 |
+| Channels | Fx, Fy, Fz + \|F\| (magnitude of each 3-axis group), as a channel set with descriptor embeddings | §5.4, §6.3 |
 | Duplicates | Attached to the latest member; the others force-missing | D8 |
 | Photo crop (tool) | Rows 0.30-0.85, full width, 224 × 672 | §5.7 |
-| PCA | 16 + 16 per photo type; 8 + 8 per force channel (absolute + relative); fitted on the training tools | §5.9 |
-| Tool baseline and token mode | First B = 4 recorded passes, causal running mean; token mode "both" (absolute + relative halves); readouts absolute | §5.9 |
+| Encoders | Mantis-8M (force, 512-sample sub-windows, mean + sd pooled) and DINOv2-B/14 (photos, CLS + 2 × 4 grid), frozen; 7 level descriptors per channel | §6.2 |
+| Projection | LayerNorm + shared low-rank projection (rank 16) per modality; no PCA | §6.3, §6.10 |
+| Tool baseline and token mode | First B = 4 recordings, causal running mean; token mode "both" (absolute + relative halves); readouts absolute | §5.9 |
 | Fusion | F1 or F0 (Gate 2a) | §6.4 |
 | F1 backbone | Causal transformer: 2 layers, d = 64, 4 heads, FFN 128, dropout 0.2, relative-time bias | §6.4 |
-| Heads | Dual-unit Student-t: μ = k_u·sigmoid; σ floor 0.005·k_u; ν = 3 + softplus | §6.6 |
-| Loss weights | MSE 1; NLL 0.5 (mean detached); consistency 0.1; VB 0.3 | §6.7 |
+| Head | Student-t RUL in seconds: μ = H·sigmoid; σ floor 0.005·H; ν = 3 + softplus | §6.6 |
+| Loss weights | MSE 1; NLL 0.5 (mean detached); consistency 0.1; HI 0.3 | §6.7 |
 | Point weights | Equal total per tool; w_far = 0.3 | §7.3 |
 | Optimizer | AdamW, lr 1e-3 (Gate 2a), weight decay 0.05, gradient clip 1.0 | §7.3 |
 | Schedule | Phase A 1-100 (warm-up 20); phase B 101-500, cosine; NLL ramp 101-150; EMA 0.99 restarted at 101; patience 10 evaluations | §7.4 |
 | Batch | 8 training tools × 4 augmented copies | §7.3 |
-| Augmentation | Trajectory ρ ~ U[0, 0.2]; modality dropout 0.3 each (all four 0.05); channel 0.1; token 0.1; feature noise 0.1 | §6.8 |
-| Seeds | 3 (gates), 5 (final) | §4.5 |
+| Augmentation | Trajectory (recordings) ρ ~ U[0, 0.2]; modality dropout 0.3 each (all together 0.05); channel 0.1; token 0.1; feature noise 0.1 | §6.8 |
+| Seeds | 3 (gates and final) | §4.5, D19 |
 | Calibration | Out-of-fold scale, 4 inner folds (Gate 3 decides) | §9 |
-| Gate rules | A: threshold, ≥ 7 of 10 wins, no unit worse by > 5 %; B: best mean | §4.4 |
+| Gate rules | A: ≥ 10 s (H/150) lower validation MAE and ≥ 7 of 10 wins; B: best mean | §4.4 |
 
 ## Appendix B: how the numbers were measured
 

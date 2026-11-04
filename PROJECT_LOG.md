@@ -11,7 +11,7 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 | S0 Foundations | **Done** (2026-11-04) | `rulfuse verify-data` ok; tests, ruff and pyright clean |
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
 | S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
-| S3 Features, Ruche, Gate 1 | Next | – |
+| S3 Core/adapter refactor, features, Gate 1 | Next (plan changed 2026-11-04: seconds only, 3 seeds, generic core) | – |
 | S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
@@ -311,3 +311,77 @@ defaults.
 4. The Ruche setup and jobs J0-J4.
 5. Gate 1: VB-probe ranking, the derived channels, the cross-fitted readouts, and the
    stage-step leakage probe for every photo type.
+
+---
+
+## Plan change: fixed encoders and a transferable design (2026-11-04, no code yet)
+
+Your request: one time-series and one image encoder without screening runs, and a model
+that generalizes beyond Nonastreda as a versatile backbone. Plan sections changed: D16,
+D17, §4.2, §4.4, §5.4, §5.7-§5.9, §6.1-§6.3, §6.8-§6.10 (new), §7, §11, §12, §13, §14,
+§15 P8-P9, §16, §17, §18, §19, App. A.
+
+| Change | Before | Now | Why |
+|---|---|---|---|
+| Encoders (D16) | Gate 1 screened 7 force and 5 photo encoders (Ruche jobs J3, J4) | **Mantis-8M** for every force channel, **DINOv2-B/14** for every photo type, frozen; alternatives documented, not run; MOMENT-1-base only as a fallback if a go/no-go check fails | Your instruction; Mantis is built for frozen classification features and is channel-independent and small; DINOv2 keeps local texture and is not gated |
+| PCA (D17) | Per-fold PCA (16 per channel, 32 per photo) fitted on the training tools | **No PCA in the model.** LayerNorm + a learned, shared low-rank projection (rank 16), part of the reusable backbone. PCA kept only for analysis and baseline B4 | A PCA basis is a property of one dataset's training tools; refitting it elsewhere changes every input's meaning, so a trained model could not transfer |
+| Physics features (D17) | Up to ~20 per channel, some Nonastreda-specific (66.7 Hz spindle line, period-15 average, fixed-Hz bands) | **6 generic level descriptors** per channel (log RMS and log peak of the AC part, kurtosis, crest, mean, slope; Project 14's functions), absolute and relative to the healthy start. Machine-specific ones dropped; the full set only for B4 | Normalized foundation encoders cannot see absolute level, and the level is Stage 1's strongest wear signal (ρ 0.70); generic descriptors transfer, machine parameters do not |
+| Channels | 5 fixed PCA blocks | A **channel set** with descriptor embeddings (sensor type, axis, derivation), pooled per segment | Any sensor set (accelerometer, microphone) fits without changing the model |
+| Stage 3 | Features on Ruche, Gate-1 encoder ranking, derived-channel decision (Nov 10-17) | Features on the **laptop CPU**, a pass/fail feature check and the leakage probe (Nov 10-14); Ruche setup moves to Stage 4 | No screening, no Ruche feature jobs |
+| LoRA, per-fold PatchTST | Stretch goals | Documented alternatives | Fewer runs; no encoder training |
+| Decisions | 17 | 10 | Encoder, derived-channel and LoRA decisions removed |
+| Ruche budget | 65-80 A100-hours | 45-55 | No feature jobs; Shapley with 3 players if the workpiece fails (7 coalitions) |
+| Stage 6 | – | A plain-language explanation added to §17.2 | Your request |
+
+**Code impact (for later).**
+
+- Stage 2's `normalization.py` keeps `PCA` and `BlockTransform`, used now only by
+  baseline B4 and the analysis.
+- `Scaler` is now used for the level descriptors; `causal_baseline` is unchanged.
+- No code was changed in this step.
+
+---
+
+## Plan change: seconds only, 3 seeds, a generic core with a dataset adapter (2026-11-04, no code yet)
+
+Your request: 3 random seeds instead of 5; RUL predicted only in seconds, because other
+datasets have no passes; as few dataset-specific models and functions as possible. Plan
+sections changed: D3, D6, D7, D9, D11, D18 and D19 (new), §1, §2.6, §2.7, §3, §4.2-§4.5,
+§5, §6.1-§6.10, §6.11 (new), §7, §8, §9, §10, §11, §12, §13 (L20 new), §14.2-§14.4, §15
+(P22 new), §16 J10, §17 Stages 1, 3, 5 and 6, App. A. Backup of the previous version:
+the session scratchpad, `PROJECT_PLAN.before-generic.md`.
+
+| Change | Before | Now | Why |
+|---|---|---|---|
+| Output (D6) | Two Student-t heads, RUL in seconds and in passes | **One head, RUL in seconds of operation** | Passes exist only in Nonastreda |
+| Horizon (D3) | k = 15 passes and 1,500 s | **H = 1,500 s**, a dataset setting; window RUL ≤ H (1,361 points) | Same window in one unit |
+| Selection and gate metric | MAE_eq = ½ (MAE_pass + MAE_sec / 100 s) | **MAE in seconds**; Rule A threshold 10 s (H/150), the "neither unit worsens" clause dropped; also reported as MAE / H | One unit |
+| Bar to beat (§2.7) | B2 3.82 passes / 468 s | **B2 468 s**, B0 412 s, B1 513 s; B2 intervals 0.50 coverage, Winkler 5,388 s | Seconds only |
+| Seeds (D19) | 3 for gates, 5 for the final model | **3 everywhere** | Your instruction; J10 falls from 250 to 150 fits, the Ruche total to about 40-50 A100-hours |
+| Architecture (D18, §6.11) | Nonastreda logic spread through the pipeline | **Generic core + one Nonastreda adapter.** The adapter gives units with recordings (start, duration, channels with descriptors), observations (images with type and availability time, optional health indicator, optional stage labels) and a failure time. The core never refers to passes, runs, blocks, photo types or flank wear | Transfer to other datasets |
+| Fz_rel channel | Fz minus its mean over the pass's first second | **Removed.** Every channel gets a 7th generic descriptor: the mean change since the recording started | The same information without a Nonastreda-only channel |
+| Channels | Fx, Fy, Fz, Fz_rel, \|F\| | **Fx, Fy, Fz, \|F\|** (magnitude of every 3-axis group: a generic rule) | As above |
+| Usage input | Completed passes, τ, seconds into the pass | **Operating time τ and seconds since the recording started** | No pass count |
+| F0 experts | Usage, force, and one GRU per photo type (5) | **Usage, signals, images (3)**; one image GRU with type embeddings | Expert count no longer depends on the dataset's photo types |
+| Wear-class head (CORAL), oracle R2, single-unit control | Planned | **Removed** | Tied to Nonastreda's three classes or to passes |
+| Wear target | Flank wear VB̃ | **Optional health indicator (HI)**; here VB̃. Phase A is skipped when a dataset has no HI | Not every dataset measures wear |
+| Thresholds | In passes (late > 1 pass, RUL bins of 3 passes, ±2 passes) | **Fractions of H** (late > H/15 = 100 s, 300 s bins, ±200 s) | Comparable across datasets |
+| Proof of transfer | – | **P22:** an import-graph test (the core never imports the adapter) and a synthetic toy adapter (2 accelerometer channels at 2 kHz, one image type, H = 600 s) run one fold end to end | Makes "generic" testable |
+| Stage 3 | Features and Gate 1 | **First task: refactor the Stage 0-2 code** into `rulfuse/core/` and `rulfuse/adapters/nonastreda/` with the toy adapter and P22; the 78 tests move and stay green | The code still follows the old structure |
+
+**Interpretation.** "Not folds" in your message was read as "not passes" (the fold
+protocol, leave-one-tool-out, is unchanged).
+
+**What stays Nonastreda-specific, inside the adapter:** MAT/CSV loading and verification,
+the span-rule trim, duplicate groups (D8), the gap-aware timeline (D12), the five TTF
+rules, the photo crops and the workpiece standardization, flank-wear smoothing, and the
+`tool_label` stages for the leakage probe.
+
+**Code impact (for Stage 3).**
+
+- `labels.py` computes RUL in passes and seconds; the passes columns become unused and
+  are dropped in the refactor. The segment store `8d2b69c23453` gets a new signature then.
+- `channels.py` drops `Fz_rel` and `fz_offset`; `features/physics.py` gains the drift
+  descriptor.
+- `metrics.mae_eq` and the passes baselines are removed; `baselines.py` keeps seconds.
+- No code was changed in this step.
