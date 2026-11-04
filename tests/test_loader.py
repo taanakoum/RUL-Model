@@ -181,7 +181,7 @@ def test_verify_data_on_synthetic_copy(tmp_path: Path):
     (repo / "labels.csv").write_bytes(crlf)
     report = verify_data(raw, repo, expected_passes=4)
     assert report["ok"], report
-    assert report["repo_data"]["line_endings_only"] == ["labels.csv"]
+    assert report["repo_data"]["line_endings_only"] == ["labels.csv", "labels_reg.csv"]
     (raw / "tool" / "T1R1B2.jpg").write_bytes(b"changed")
     report = verify_data(raw, repo, expected_passes=4)
     assert not report["ok"] and report["files_mismatched"] == ["tool/T1R1B2.jpg"]

@@ -70,7 +70,7 @@ Severity:
 | R32 | Minor | §1 S1 | The Wilcoxon power with n = 10 was not stated | Stated: one-sided, Holm over 2 units; needs about 8 or more tools improved (§1, §10.3) |
 | R33 | Minor | §8 | B4 and B5 were vague ("+ ridge") | B4: ridge on recent physics features + usage. B5: the photo wear readout + degradation extrapolation |
 
-## 3. Needs your input
+## 3. Needs your input (answered 2026-11-04: yes, the runs were cut; D12 is final)
 
 **R1, the gap-aware axis (plan §2.5, D12, open question 1).** The evidence:
 

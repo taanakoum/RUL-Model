@@ -1,6 +1,8 @@
 # Raw data and generated outputs live outside the repository (RULFUSE_DATA_ROOT, D:\RULModel).
-Data/
-runs/
+# Anchored to the repository root: on Windows git ignores case, so an unanchored "Data/"
+# also matched the package folder rulfuse/data/.
+/Data/
+/runs/
 *.npy
 *.parquet
 
