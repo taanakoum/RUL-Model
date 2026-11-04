@@ -38,6 +38,7 @@ class Dataset:
     durations: dict[str, float]  # trimmed seconds of every record
     timelines: dict[str, list[Slot]]
     labels: dict[str, ToolLabels] = field(default_factory=dict)
+    raw: Path = field(default_factory=paths.raw_dir)
 
     @property
     def tools(self) -> list[str]:
@@ -56,7 +57,8 @@ def load_dataset(
     store_dir: str | Path | None = None,
 ) -> Dataset:
     opts = options or DatasetOptions()
-    metas = load_labels(raw or paths.raw_dir())
+    raw_path = Path(raw) if raw is not None else paths.raw_dir()
+    metas = load_labels(raw_path)
     store = ForceStore.open(store_dir or paths.force_store_dir())
     bounds = trimmed_bounds(store, opts.trim_rule)
     durations = {rid: (end - start) / SAMPLE_RATE_HZ for rid, (start, end) in bounds.items()}
@@ -73,4 +75,4 @@ def load_dataset(
         tool: tool_labels(timeline, by_tool[tool], opts.ttf_rule, opts.k, opts.k_sec)
         for tool, timeline in timelines.items()
     }
-    return Dataset(opts, metas, store, bounds, durations, timelines, labels)
+    return Dataset(opts, metas, store, bounds, durations, timelines, labels, raw_path)

@@ -6,8 +6,8 @@ Version 2 follows a full review of version 1. [PLAN_REVIEW.md](PLAN_REVIEW.md)
 lists every finding, the change it caused and why. Version 1 is kept in
 [docs/archive/PROJECT_PLAN_v1.md](docs/archive/PROJECT_PLAN_v1.md).
 
-Status: **Stages 0 and 1 done** (2026-11-04; see [PROJECT_LOG.md](PROJECT_LOG.md) and
-[docs/EDA_RUL.md](docs/EDA_RUL.md)). Every number below was measured
+Status: **Stages 0-2 done** (2026-11-04; see [PROJECT_LOG.md](PROJECT_LOG.md),
+[docs/EDA_RUL.md](docs/EDA_RUL.md) and [docs/END_TO_END.md](docs/END_TO_END.md)). Every number below was measured
 on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 `experiment_results/eda/records.csv`, and on the chip and workpiece photos in
 `D:\Project14\data\raw\nonastreda`. Appendix B lists how.
@@ -210,9 +210,9 @@ physical passes per run, and only the force file was copied.
 | Same-pass photo leaks the label | Copying the lag-0 photo's label scores 0.91-0.95 (`EDA.md` §7) | D9, plus a test |
 | Run number is a shortcut | Run number alone gives 71 % accuracy (OmniFuser F2) | No run or block codes; usage enters only as explicit, switchable time features; schedule baselines B1-B3 in every table |
 | Fz drifts | Sawtooth that resets every 1-3 passes; its level correlates with wear at −0.04 (F3) | All channels input (D4); a causal, offset-removed Fz_rel neutralizes the drift (§5.4); the channel study (§11.5) measures what Fz adds |
-| Tool-to-tool force offset | T1's Fx sits at +1.15 sd of the training distribution (`EDA.md` §8) | Tokens relative to each tool's own healthy start (§5.9) |
+| Tool-to-tool force offset | T1's Fx sits at +1.15 sd of the training distribution (`EDA.md` §8) | Tokens carry the absolute level and the change from each tool's healthy start (§5.9). Relative-only removes static offsets such as T1's but not the cross-tool shift (Stage 2) |
 | Frozen ImageNet features read wear poorly | Photo probe 0.61-0.67 accuracy against 0.95 possible; the crop helps; resolution alone does not | Edge crop, DINOv2 grid, wear-regression readout; LoRA as a stretch goal |
-| Absolute embeddings plus elapsed time memorize units | Project 14 RUL GRU peaked after 1 epoch (`pdmfm/rul.py`) | Relative tokens, trajectory augmentation, small models |
+| Absolute embeddings plus elapsed time memorize units | Project 14 RUL GRU peaked after 1 epoch (`pdmfm/rul.py`) | Trajectory augmentation, small models, PCA; the token mode is decided in Gate 2b |
 | Wear is not monotone | Flank wear decreases at 189 of 502 steps (F12) | Isotonic-smoothed wear targets; causal smoothing wherever wear is an *input* (R1) |
 | Workpiece photos encode the stage label (found in Stage 1) | Mean brightness steps at the first run of `tool_label` stage 2 in 10 of 10 tools (96 % of its range); texture also at stage 3 (`docs/EDA_RUL.md` §6) | Per-image standardization; Gate-1 stage-step leakage probe for every photo type (§6.2); exclusion if it fails |
 | Whole-pass preprocessing leaks within the pass | OmniFuser's trim uses 5 % of the pass length | Causal trim (§5.2) |
@@ -295,9 +295,10 @@ $$
 **Worked examples.**
 
 - **T5** (P* = 19). At the end of pass 4, RUL = 15 and the window opens. At
-  the end of segment 5 of pass 10, t = 9 + 50/97 = 9.52 and RUL = 9.48 passes;
-  τ ≈ 923 s, so RUL^sec ≈ 904 s, about 15 min of cutting. At the end of pass
-  19 both are 0.
+  the end of segment 5 of pass 10 (record T5R3B2, 96.05 s long), t = 9 + 50/96.05
+  = 9.52 and RUL = 9.48 passes. τ = 909.7 s and T5 fails at 1,827.0 s, so
+  RUL^sec = 917.3 s, about 15 min of cutting. At the end of pass 19 both are 0.
+  `scripts/end_to_end_trace.py` reproduces these numbers.
 - **T4** (P* = 38). At the end of R5B4 (pass 20), RUL = 18 passes. The
   recorded axis would say 2.
 
@@ -453,7 +454,8 @@ channels are added.
 - **Per channel:**
   1. the encoder embeddings (mean and sd over the sub-windows);
   2. concatenated with that channel's physics features;
-  3. standardized and PCA-reduced to 16 components;
+  3. standardized and PCA-reduced to 16 components (8 on the absolute values,
+     8 on the values relative to the tool's healthy start; §5.9);
   4. the five blocks concatenated into an 80-dimensional force token.
 - A channel can therefore be masked cleanly (channel dropout, §6.8; the
   channel study, §11.5).
@@ -496,11 +498,25 @@ normalized with the ImageNet statistics.
 - **Location:** everything generated lives under `RULFUSE_DATA_ROOT`, default
   `D:\RULModel`, outside OneDrive (§14.1). This covers the raw copy, the
   stores, the caches and the runs.
-- **Segment store:** `interim/segments/<signature>/`, holding:
-  - `signals.f32`, the unique force recordings (about 450 MB, memory-mapped);
-  - `segments.parquet`;
-  - `passes.parquet` (labels, availability, gaps, duplicates);
-  - `meta.json`.
+- **Force store (built in Stage 0):** `interim/forces/`, holding:
+  - `signals.npy`: the 378 distinct recordings, float32, memory-mapped (452 MB);
+  - `index.csv`, `groups.json`, `meta.json` (with the MAT file's sha256).
+- **Segment store (built in Stage 2, `rulfuse build-store`):**
+  `interim/segments/<signature>/`. It points into the force store and copies no
+  samples. It holds:
+  - `passes.parquet`: one row per pass, unrecorded ones included. Trim bounds,
+    durations, cumulative time, force attachment, the photo position (D9),
+    labels, smoothed and causal wear;
+  - `segments.parquet`: one row per 10 s segment of every recorded pass,
+    including those after the TTF. Sample bounds, the distinct-segment id for
+    encoding, the input times, the label time, the RUL targets of prediction
+    points, and the baseline flag;
+  - `tools.json` (TTF, baseline passes) and `meta.json` (signature, inputs,
+    counts).
+- **Store signature.** A hash of the force store's sha256, the label files' sha256,
+  every `DatasetOptions` field and the segment settings. The default store is
+  `8d2b69c23453`: 532 passes, 5,125 segments, 3,747 prediction points, 3,777
+  distinct segments to encode.
 - **Feature caches:** `interim/features/<modality>-<encoder>-<signature>/`,
   holding an `(n_items, dim)` float16 array and an index.
   - The signature names the checkpoint revision and the preprocessing
@@ -512,16 +528,27 @@ normalized with the ImageNet statistics.
 
 - **Fold level.** Standardize each feature with the training tools' mean and
   sd. Then apply PCA, fitted on the training tools: 32 components per photo
-  type, 16 per force channel.
+  type and 16 per force channel in total, half on the absolute features and
+  half on the tool-relative ones (token mode "both", below).
 - **Tool level (causal baseline).**
-  - Each token is taken relative to the tool's healthy start:
+  - The relative half of each token is taken against the tool's healthy start:
     $$\tilde z = z - b_u(t),\qquad b_u(t) = \text{mean of } z \text{ over the tool's force segments in its first } B=4 \text{ recorded passes, among those seen by } t .$$
   - Photos are taken relative to the tool's first photo.
   - The wear readouts (§6.2) stay **absolute**: a dull edge looks dull on any
     tool.
-  - Ablation: absolute tokens, and absolute plus relative. Stage 1 found that the
-    absolute force level relates to wear across tools at least as well as the relative
-    one (`docs/EDA_RUL.md` §7), so "absolute + relative" is a serious Gate-2b candidate.
+  - **Token mode (changed in Stage 2): "both" by default.** Every token carries an
+    absolute half and a tool-relative half, at the same total size.
+    - The plan assumed relative tokens would remove tool identity.
+    - Stage 1 found absolute force levels relate to wear across tools at least as
+      well (`docs/EDA_RUL.md` §7).
+    - Stage 2 measured, on per-segment channel statistics
+      (`runs/stage2/validation.json`):
+      - relative features *raised* the test tool's shift in 6 of 10 folds
+        (median 0.35 sd against 0.31 absolute), and only static offsets shrank
+        (T1: 0.97 → 0.34);
+      - tools were *easier* to identify from relative features (35 % against
+        23 %, chance 10 %).
+    - Gate 2b compares relative, absolute and both as peers (Rule B).
 
 ---
 
@@ -535,7 +562,7 @@ normalized with the ImageNet statistics.
  │ force seg│...│ force seg│...│ force seg│  raw 1 kHz Fx, Fy, Fz (+ Fz_rel, |F|), 10 s
  └────┬─────┘   └────┬─────┘   └────┬─────┘
       ▼ per channel: frozen TS encoder on 512-sample sub-windows (mean+sd) ⊕ physics features
-      ▼ standardize → PCA(16) per channel → minus the tool's causal baseline → MLP → d=64
+      ▼ standardize → per channel PCA(8) absolute ⊕ PCA(8) relative to the causal baseline → MLP → d=64
  photos of passes < p (tool | chip | workpiece)
       ▼ frozen image encoder on the crop → PCA(32) → minus the first photo → MLP → d=64
       ▼ + absolute wear readout VB̂ (cross-fitted ridge probe)
@@ -620,8 +647,8 @@ Why a hierarchy:
 
 | Token | Content | Position |
 |---|---|---|
-| Force segment (p, s) | Projected tool-relative force token; `force_present` flag. A force-missing segment uses a learned mask vector | Its end time τ_{p,s} |
-| Photo (p, m), m ∈ {tool, chip, work} | Projected tool-relative photo features + the absolute wear readout VB̂ | Immediately after the last segment of pass *p*, so only from pass *p+1* on (D9) |
+| Force segment (p, s) | Projected force token (absolute and tool-relative halves); `force_present` flag. A force-missing segment uses a learned mask vector | Its end time τ_{p,s} |
+| Photo (p, m), m ∈ {tool, chip, work} | Projected photo features (absolute and relative-to-first-photo halves) + the absolute wear readout VB̂ | Immediately after the last segment of pass *p*, so only from pass *p+1* on (D9) |
 
 - **Usage features (U, switchable):** Fourier features of the completed
   passes *p* − 1 and of τ_{p,s}, plus e_{p,s}. They are added to every force
@@ -763,7 +790,7 @@ so within one epoch.
 |---|---|---|
 | P1 | Learn little; borrow most | Frozen encoders, PCA, about 0.1 M trainable parameters |
 | P2 | Dense supervision before sparse | Phase A learns wear from about 410 passes before any RUL target (§7.4) |
-| P3 | Give the model nothing that identifies a tool | Tool-relative tokens; no run or block codes; PCA on the training tools; equal loss weight per tool |
+| P3 | Give the model nothing that identifies a tool | No run or block codes; PCA on the training tools; equal loss weight per tool; the token mode tested in Gate 2b (Stage 2: relative tokens did not make tools harder to identify) |
 | P4 | Break the link between elapsed time and RUL | Trajectory augmentation (§6.8) |
 | P5 | Judge only on held-out tools | Selection on the validation tool, calibration out-of-fold, test read after the freeze (D15) |
 | P6 | Average away training noise | EMA weights, smoothed selection, seed ensembles, paired gate rules |
@@ -861,7 +888,7 @@ Cost: about 0.05-0.3 s per step on a CPU, so a fit takes 1-3 min; the pilot
 |---|---|---|
 | Defaults | Fixed in Appendix A before any run | – |
 | Gate 2a | Learning rate {3e-4, 1e-3, 3e-3} for each of F1 and F0 (Rule B within a family); then F1 against F0 at their best (Rule B) | 2 × 3 × 10 folds × 3 seeds = 180 |
-| Gate 2b | Options on the winner, each by Rule A: no trajectory augmentation; no phase A; absolute tokens; absolute + relative tokens | 4 × 30 = 120 |
+| Gate 2b | Options on the winner, no trajectory augmentation and no phase A (each by Rule A); token mode relative only or absolute only against the default both (peers, Rule B) | 4 × 30 = 120 |
 | Gate 2b control | Last recorded pass only (reported, not a decision: your specification is the full history) | 30 |
 | Sweep | One factor at a time on the winner, each by Rule A: d {32, 96}; dropout {0.1, 0.3}; PCA per photo / per channel {16/8, 64/32}; ρ_max {0.1, 0.3}; w_far {0.1, 1.0} | 10 × 30 = 300 |
 
@@ -877,7 +904,7 @@ tune on (OmniFuser F4).
 | Long lives dominating the loss | Equal weight per tool |
 | The healthy plateau dominating | w_far = 0.3 |
 | Unstable variance learning | Mean detached in the NLL; NLL ramp; σ floor; ν ≥ 3; calibration after training |
-| Tool-to-tool shift | Tool-relative tokens; trajectory, modality and channel dropout |
+| Tool-to-tool shift | Token mode chosen in Gate 2b; trajectory, modality and channel dropout |
 | One validation tool per fold | Decisions from 10 folds × 3 seeds with paired rules (§4.4) |
 | Calibrating on the tool used for selection | Out-of-fold calibration on the 8 training tools; the validation tool then checks coverage independently (§9) |
 | Stacking leakage of the wear readout | Cross-fitted readouts |
@@ -976,7 +1003,7 @@ Every table shows these, in both units.
 | B1 | Mean training TTF − elapsed time, capped | Yes | Pure usage (5.17 passes, 513 s) |
 | B2 | E[min(TTF − t, k) \| TTF > t] over the training tools. Intervals from the empirical quantiles of min(TTF_j − t, k) over the training tools still alive at t | Yes | Best usage-only rule (3.82 passes, 468 s); the S1 and S2 reference |
 | B3 | Learned usage-only model: the chosen head on U features, no trajectory augmentation | Yes | A learned B2; v(∅) candidate (§11) |
-| B4 | Ridge on the tool-relative physics features (mean of the last 3 segments) + usage features → capped RUL | Yes | Classic tool-wear regression |
+| B4 | Ridge on the physics features (absolute and tool-relative) (mean of the last 3 segments) + usage features → capped RUL | Yes | Classic tool-wear regression |
 | B5 | Photo wear readout VB̂ of the tool photos + degradation extrapolation (F5 machinery, §6.5) | Yes | "Read the photo and extrapolate" |
 | R1 | Oracle: *measured* wear, causally isotonic-smoothed, + the same extrapolation | No | Upper reference: what a perfect photo reader would give |
 | R2 | Oracle: last photo's class + residual-life table from the training tools | No | How much the class labels give |
@@ -1192,9 +1219,9 @@ the vendored loader with OmniFuser's whenever both are present.
 | L2 | The run number is a 71 % shortcut (F2) | No run or block codes; usage explicit and switchable; B1-B3 everywhere |
 | L3 | Fz drifts (F3) | All channels input; Fz_rel; Fz's contribution measured |
 | L4 | One validation tool is noisy; replicates differ by up to 0.017 (F4, F14) | Smoothed whole-life selection, seed ensembles, Rule A with 7 of 10 wins |
-| L5 | The cross-tool gap (training 0.88, test 0.67), not under-fitting | Frozen encoders, PCA, relative tokens, trajectory augmentation, about 0.1 M parameters |
+| L5 | The cross-tool gap (training 0.88, test 0.67), not under-fitting | Frozen encoders, PCA, trajectory augmentation, about 0.1 M parameters; token mode tested in Gate 2b |
 | L6 | Frozen ImageNet features read wear poorly; the crop helps; fine-tuning helps most | Edge crop, DINOv2 grid, wear readout; LoRA by Rule A on the full model |
-| L7 | Absolute embeddings plus elapsed time memorize the training units (Project 14) | Relative tokens; trajectory augmentation; s_U diagnostic |
+| L7 | Absolute embeddings plus elapsed time memorize the training units (Project 14) | Trajectory augmentation; s_U diagnostic; token mode tested in Gate 2b (in Stage 2, absolute features identified tools *less* than relative ones) |
 | L8 | Longer history did not help with 9 units (Project 14 XJTU-SY) | "Last pass only" control, reported |
 | L9 | Spectrograms of the raw force gave OmniFuser's best forecasts | Encoder SP in Gate 1 |
 | L10 | C2F and the image GAT gained nothing over concatenation; late fusion was hard to beat (Project 14) | Finalists F1 and F0; C2F documented as an alternative |
@@ -1322,7 +1349,7 @@ A part is done only when all three pass.
 | **P4 Segmentation** | Lost or double-counted samples; boundaries that depend on the future | Remainder rule; segments tile the trimmed pass exactly; sub-windows cover every sample; boundaries depend only on samples already seen | 3,747 pre-TTF points; per-tool counts of §2.2 | – | Exact |
 | **P5 Labels** | Wrong TTF; RUL arithmetic; caps; a TTF inside a gap | Each rule on hand-made sequences (flips, ties, sequence end); RUL in both units; caps and masks; isotonic non-decreasing; causal isotonic uses only the past | The TTF table of §2.3 and the windows of §2.2 exactly | Smoothed wear at the TTF in 109-123 µm for every tool | Exact |
 | **P6 Folds** | Tool in two roles | Disjoint; cyclic; each tool tested once | – | – | Exact |
-| **P7 Normalization** | Statistics from validation or test tools; non-causal baseline | Poison test: extreme values in validation and test tools leave the scalers and PCA unchanged; perturbing later segments leaves b_u(t) unchanged | – | After the tool-relative step, the test tools' median shift from the training distribution falls below the 0.16-0.32 sd of `EDA.md` §8 | Poison and causality tests pass; shift reduced |
+| **P7 Normalization** | Statistics from validation or test tools; non-causal baseline | Poison test: extreme values in validation and test tools leave the scalers and PCA unchanged; perturbing later segments leaves b_u(t) unchanged | – | Reported, not a gate: the test tool's shift and the tool identifiability for absolute against relative features (Stage 2: shift 0.31 against 0.35 sd; identification 23 % against 35 %, so the premise was not confirmed beyond static offsets; the token mode moved to Gate 2b) | Poison and causality tests pass |
 | **P8 Encoders and caches** | Wrong checkpoint; non-determinism; mixed caches | Shapes; same input → same output; the signature changes with checkpoint or preprocessing; a cache with a foreign signature is refused | Offline loading on Ruche (J0); duplicated recordings → identical embeddings; laptop vs Ruche embeddings of 20 segments agree within 1e-3 relative | – | All pass |
 | **P9 Gate-1 probes and readouts** | Probe leakage; in-sample readouts; photo features that encode the stage label | Ridge recovers known coefficients; a cross-fitted readout of a tool never uses that tool's labels; PCA fitted on training only | Readout MAE on held-out tools reported per photo type | The H probe beats the training-mean VB predictor; shuffling VB within training tools collapses the probe to the mean | Leakage tests pass; H beats the mean; stage-step leakage probe: a stage boundary is the largest run-boundary step in ≤ 3 of 10 tools (`rulfuse.audit`) |
 | **P10 Tokens and time** | D_p or the future reaching an input | Usage features at (p, s) do not change when D_p or later samples change; photo tokens sit after their pass's last segment; the relative bias depends only on Δτ | Spot-check of 20 random points against the timeline table | – | All pass |
@@ -1636,7 +1663,7 @@ Each decision is appended to `PROJECT_LOG.md` with its numbers.
 | 7 | Fusion family (F1 or F0) | 2a | B |
 | 8 | Trajectory augmentation | 2b | A |
 | 9 | Phase-A warm-up | 2b | A |
-| 10 | Token mode | 2b | A |
+| 10 | Token mode (relative, absolute, both) | 2b | B (peers, after the Stage-2 evidence) |
 | 11 | Sweep adoptions (each factor) | Sweep | A |
 | 12 | (Control) last pass only | 2b | Reported, not decided |
 | 13 | Head (Student-t or quantile) | 3 | B |
@@ -1653,7 +1680,7 @@ Each decision is appended to `PROJECT_LOG.md` with its numbers.
 |---|---|---|
 | 10 tools give wide intervals; gaps between models are not significant | High | Paired tests; effect sizes with intervals; few pre-registered comparisons; both summaries |
 | The model leans on usage and adds little over B2 | Medium-high | Trajectory augmentation; s_U diagnostic; B2 and B3 everywhere; sensing-only study |
-| The force carries little RUL information (Project 14: flat force pathway) | Medium | Physics features and spectrograms in Gate 1; relative tokens; the channel study |
+| The force carries little RUL information (Project 14: flat force pathway) | Medium | Physics features and spectrograms in Gate 1; both token halves; the channel study |
 | Photo features stay weak | Medium | Crop, DINOv2 grid, wear readout; LoRA; the chip photo as a second visual cue |
 | The gap-aware axis is wrong (the runs were not cut) | Low (you confirmed it; the wear jumps agree) | The recorded-axis arm (tier 1) |
 | T4's thin window (20 points) and T5's short life | High | Whole-life selection; both summaries; per-tool reporting |
@@ -1707,11 +1734,11 @@ Each has a default that the plan assumes until you answer.
 | Selection and gate metric | MAE_eq = ½ (MAE_pass + MAE_sec / 100 s) | §4.3 |
 | Segment | 10 s from the causally trimmed start, remainder < 5 s merged | D7, §5.2 |
 | Trim reference | Median envelope over the first 5 s | §5.2 |
-| Channels | Fx, Fy, Fz (always) + Fz_rel, \|F\| (Gate 1); PCA 16 per channel | §5.4 |
+| Channels | Fx, Fy, Fz (always) + Fz_rel, \|F\| (Gate 1); PCA 8 absolute + 8 relative per channel | §5.4 |
 | Duplicates | Attached to the latest member; the others force-missing | D8 |
 | Photo crop (tool) | Rows 0.30-0.85, full width, 224 × 672 | §5.7 |
-| PCA | 32 per photo type; 16 per force channel; fitted on the training tools | §5.9 |
-| Tool baseline | First B = 4 recorded passes, causal running mean; readouts absolute | §5.9 |
+| PCA | 16 + 16 per photo type; 8 + 8 per force channel (absolute + relative); fitted on the training tools | §5.9 |
+| Tool baseline and token mode | First B = 4 recorded passes, causal running mean; token mode "both" (absolute + relative halves); readouts absolute | §5.9 |
 | Fusion | F1 or F0 (Gate 2a) | §6.4 |
 | F1 backbone | Causal transformer: 2 layers, d = 64, 4 heads, FFN 128, dropout 0.2, relative-time bias | §6.4 |
 | Heads | Dual-unit Student-t: μ = k_u·sigmoid; σ floor 0.005·k_u; ν = 3 + softplus | §6.6 |

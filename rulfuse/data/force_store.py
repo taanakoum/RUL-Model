@@ -86,14 +86,23 @@ class ForceStore:
 
 def build_force_store(raw: str | Path, root: str | Path, metas: Sequence[PassMeta]) -> Path:
     """Read the MAT file once and write the store to ``root`` (atomically, via a temp dir)."""
-    raw_path, out = Path(raw), Path(root)
-    mat_path = raw_path / MAT_FILE
+    mat_path = Path(raw) / MAT_FILE
+    forces = dict(parse_datastore(read_datastore(mat_path), metas))
+    source = {
+        "source": str(mat_path),
+        "source_bytes": mat_path.stat().st_size,
+        "source_sha256": sha256_file(mat_path),
+    }
+    return write_force_store(root, forces, source)
+
+
+def write_force_store(root: str | Path, forces: dict[str, np.ndarray], source: dict) -> Path:
+    """Write ``forces`` ((samples, 3) arrays by record id) as a store. ``forces`` is consumed."""
+    out = Path(root)
     tmp = out.with_name(out.name + ".tmp")
     if tmp.exists():
         shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
-
-    forces = dict(parse_datastore(read_datastore(mat_path), metas))
     groups = duplicate_groups(forces)
     representative = {record_id: record_id for record_id in forces}
     for group in groups:
@@ -123,9 +132,7 @@ def build_force_store(raw: str | Path, root: str | Path, metas: Sequence[PassMet
     (tmp / "groups.json").write_text(json.dumps([list(group) for group in groups], indent=1))
     meta = {
         "store_version": STORE_VERSION,
-        "source": str(mat_path),
-        "source_bytes": mat_path.stat().st_size,
-        "source_sha256": sha256_file(mat_path),
+        **source,
         "records": len(representative),
         "distinct_recordings": len(distinct),
         "duplicate_groups": len(groups),

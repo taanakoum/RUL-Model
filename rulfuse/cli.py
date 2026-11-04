@@ -65,9 +65,59 @@ def cmd_hub_check(args: argparse.Namespace) -> int:
     return 0 if all(row.get("exists") for row in rows) else 1
 
 
+def cmd_build_store(args: argparse.Namespace) -> int:
+    from rulfuse.data.dataset import DatasetOptions, load_dataset
+    from rulfuse.data.segment_store import SegmentStore, build_segment_store
+
+    options = DatasetOptions(
+        trim_rule=args.trim_rule,
+        axis=args.axis,
+        attach=args.attach,
+        count_leading=args.count_leading,
+        ttf_rule=args.ttf_rule,
+    )
+    ds = load_dataset(options, raw=args.raw, store_dir=args.force_store)
+    out = build_segment_store(ds, args.out, force=args.rebuild)
+    store = SegmentStore.open(out)
+    print(f"segment store {store.signature} at {out}")
+    print(json.dumps(store.meta["counts"], indent=1))
+    return 0
+
+
+def cmd_store_info(args: argparse.Namespace) -> int:
+    from rulfuse.data.segment_store import SegmentStore
+
+    roots = [args.path] if args.path else sorted((paths.interim_dir() / "segments").glob("*/"))
+    for root in roots:
+        store = SegmentStore.open(root)
+        print(f"{store.signature}  {json.dumps(store.meta['payload']['options'])}")
+        print(f"  {json.dumps(store.meta['counts'])}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rulfuse")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    segments = sub.add_parser("build-store", help="segment store for one set of data options")
+    segments.add_argument("--raw", type=Path, default=paths.raw_dir())
+    segments.add_argument("--force-store", type=Path, default=paths.force_store_dir())
+    segments.add_argument("--out", type=Path, default=None, help="default: interim/segments/<sig>")
+    segments.add_argument("--trim-rule", default="causal", choices=["causal", "omnifuser"])
+    segments.add_argument("--axis", default="gap", choices=["gap", "recorded"])
+    segments.add_argument("--attach", default="latest", choices=["latest", "every", "dedup"])
+    segments.add_argument("--count-leading", action="store_true")
+    segments.add_argument(
+        "--ttf-rule",
+        default="confirmed",
+        choices=["confirmed", "literal", "wear110", "tool_label3", "dulled_onwards"],
+    )
+    segments.add_argument("--rebuild", action="store_true", help="rebuild even if it exists")
+    segments.set_defaults(func=cmd_build_store)
+
+    info = sub.add_parser("store-info", help="signature, options and counts of segment stores")
+    info.add_argument("path", nargs="?", type=Path, default=None)
+    info.set_defaults(func=cmd_store_info)
 
     sub.add_parser("resources", help="idle CPUs and free memory").set_defaults(func=cmd_resources)
 

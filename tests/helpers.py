@@ -64,3 +64,44 @@ def label_row(
         "flank_wear": wear,
         "overhang": "0",
     }
+
+
+SYNTHETIC_PLAN = {
+    # tool: (recorded runs, labels in pass order)
+    "T1": ([1, 2, 3], ["sharp"] * 6 + ["used"] * 3 + ["dulled"] * 3),
+    "T2": ([1, 2, 4], ["sharp"] * 4 + ["used"] * 2 + ["dulled"] * 6),  # run 3 unrecorded
+    "T3": ([1, 2, 3], ["sharp"] * 5 + ["used"] * 3 + ["dulled"] * 4),
+}
+STAGE = {"sharp": "1", "used": "2", "dulled": "3"}
+
+
+def synthetic_dataset_files(root: Path) -> tuple[Path, Path]:
+    """Raw label files and a force store for 3 small tools.
+
+    Passes are 0.8 s idle, 23-25 s of cutting, 0.8 s idle (so the trim removes the idle
+    ends and leaves 2 or 3 segments). T1R2B4 is a bit-identical copy of T1R2B3.
+    """
+    import numpy as np
+
+    from rulfuse.data.force_store import write_force_store
+
+    raw, store = root / "raw", root / "forces"
+    rng = np.random.default_rng(0)
+    rows, forces = [], {}
+    for tool, (runs, labels) in SYNTHETIC_PLAN.items():
+        slots = [(run, block) for run in runs for block in range(1, 5)]
+        for index, ((run, block), label) in enumerate(zip(slots, labels, strict=True)):
+            record_id = f"{tool}R{run}B{block}"
+            rows.append(label_row(record_id, label, STAGE[label], str(40 + 8 * index)))
+            cut = int((23 + index % 3) * 1000)
+            force = np.zeros((cut + 1600, 3), np.float32)
+            force[:, 0] = 5.0
+            force[800 : 800 + cut, 0] = 100 + 2 * index + rng.normal(0, 2, cut)
+            force[800 : 800 + cut, 2] = -10 - 0.01 * np.arange(cut) / 100  # a little drift
+            forces[record_id] = force
+    forces["T1R2B4"] = forces["T1R2B3"].copy()
+    write_label_csvs(raw, rows)
+    write_force_store(
+        store, forces, {"source": "synthetic", "source_bytes": 0, "source_sha256": "synthetic"}
+    )
+    return raw, store

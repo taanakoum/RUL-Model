@@ -10,8 +10,9 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 |---|---|---|
 | S0 Foundations | **Done** (2026-11-04) | `rulfuse verify-data` ok; tests, ruff and pyright clean |
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
-| S2 Data pipeline | Next. Already built in S1: trim, timeline, segments, labels, folds. Still to build: the segment store, photo availability and fold-level normalization | – |
-| S3-S9 | Not started | – |
+| S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
+| S3 Features, Ruche, Gate 1 | Next | – |
+| S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
 
@@ -226,3 +227,87 @@ Suggested commits for the current working tree:
 Updated: `PROJECT_PLAN.md` (banner, D12, §2.5, §18, §19), `docs/EDA_RUL.md` (§2, §6,
 §10), `PLAN_REVIEW.md` (§3). No code or result changes: the pipeline already used these
 defaults.
+
+---
+
+## Stage 2: Data pipeline (2026-11-04)
+
+### What was built
+
+| Item | Notes |
+|---|---|
+| `rulfuse/data/segment_store.py` | `build_segment_store` and `SegmentStore`: `passes.parquet` (532 rows), `segments.parquet` (5,125 rows), `tools.json`, `meta.json`, written atomically. **Signature** = hash of the force-store sha256, the label files' sha256, every `DatasetOptions` field and the segment settings; a store with the same signature is reused. `photo_visible` (D9). The store points into the force store and copies no samples |
+| `rulfuse/data/images.py` | OmniFuser's `load_photo` (crop) and the `ImageBank` idea, vendored; per-type preparation (tool edge band → 224 × 672; chip → 448²; work → 224², luminance-standardized to mean 0.5, sd 0.2); ImageNet normalization. numpy, not torch (torch arrives in Stage 3) |
+| `rulfuse/data/normalization.py` | `Scaler`, `PCA` (deterministic signs), `BlockTransform` (per-channel blocks, `output_slices` for channel masking), `train_rows`, `tool_shift`, `causal_baseline`, `relative_to_baseline`, `relative_to_first`, `baseline_rows` |
+| `rulfuse/data/channels.py` | Fz_rel (offset = mean Fz over the pass's first second, causal) and \|F\| (D4) |
+| `rulfuse/features/physics.py` | The first part of encoder H: mean and RMS of the 5 channels per segment, computed once per distinct segment |
+| `rulfuse/data/force_store.py` | Refactored: `write_force_store` (from arrays) split from `build_force_store` (from the MAT file), so tests can build small stores |
+| CLI | `rulfuse build-store` (every `DatasetOptions` field is a flag, for the §12 arms), `rulfuse store-info` |
+| `scripts/validate_stage2.py` | P7 scientific check (tool shift, tool identifiability) and the workpiece standardization check |
+| `scripts/end_to_end_trace.py`, `docs/END_TO_END.md` | One prediction point (T5, pass 10, segment 5) traced through every function with real numbers |
+| Dependency | `pyarrow` 26 (Parquet tables) |
+
+### The store (signature recorded)
+
+| | Default store `8d2b69c23453` (`D:\RULModel\interim\segments\8d2b69c23453`) |
+|---|---|
+| Passes | 532 (512 recorded + 20 unrecorded) |
+| Segments | 5,125, of which 3,747 are prediction points; 1,378 after the TTF are history and wear targets |
+| Windows | 1,338 (passes) and 1,361 (seconds) points |
+| Force-missing prediction points | 951 |
+| Distinct segments to encode | 3,777 (duplicated recordings shared) |
+| Build time | 5.7 s |
+
+### Verification (parts P3-P7)
+
+| Part | Tests | Result |
+|---|---|---|
+| P3 Timeline | `test_timeline.py`, plus the store's pass table (gap rows have no segments and photo position −1) | Pass |
+| P4 Segmentation | `test_segment_store.py`: in the synthetic and the real store, segments **tile every recorded pass exactly** and every inner boundary is a whole 10 s from the trimmed start | Pass (5,125 segments, 0 errors) |
+| P5 Labels | The store's targets equal `labels.tool_labels` row by row; rows after the TTF carry no target; real counts asserted (3,747 / 1,338 / 1,361 / 951) | Pass |
+| P6 Folds | `test_folds.py` | Pass |
+| P7 Normalization: code | `test_normalization.py`: the **poison test** (extreme validation/test rows leave the Scaler, PCA and BlockTransform unchanged); the causal baseline is a running mean that the future never changes; force-missing rows excluded; channel blocks independent | Pass |
+| P7 Normalization: science | `validate_stage2.py`: test-tool shift and tool identifiability, absolute against relative features | **Premise not confirmed** (see below); reported, as P7 now specifies |
+| Images | `test_images.py`: crop geometry, sizes, standardization (mean 0.5, sd 0.2; exposure invariance), bank = direct preparation; real workpiece photos standardized | Pass |
+| Store mechanics | Signature stable across rebuilds and sensitive to options; identical tables on rebuild; reuse without rewrite; duplicates encoded once (`attach="every"` shares distinct ids) | Pass |
+| All | 78 tests (61 synthetic in 3.2 s, 17 real-data); ruff and pyright clean | Pass |
+
+### Findings, and the decisions they caused
+
+| # | Finding | Decision | Status |
+|---|---|---|---|
+| S2-1 | **Relative tokens do not remove tool identity.** On per-segment channel statistics they remove static offsets (T1: 0.97 → 0.34 sd; T4, T6, T10 also lower), but raise the test tool's shift in 6 of 10 folds (median over folds 0.35 against 0.31 sd absolute). Tools are *easier* to tell apart from relative features (nearest-centroid 35 % against 23 %, chance 10 %). With Stage 1's finding (absolute \|F\| relates to wear across tools at 0.70 against 0.59), three signals agree | Educated guess: **default token mode "both"** (absolute + relative halves at the same size: 8 + 8 PCA per channel, 16 + 16 per photo). Gate 2b compares relative, absolute and both as peers (Rule B). P7's science check is now reported, not a gate | Plan updated: §2.6, §5.4, §5.9, §6.1, §6.3, §7.1, §7.5, §7.6, §8, §13, §15 P7, §17.3, App. A |
+| S2-2 | **Standardizing the workpiece photos does not remove the leak.** After the per-image luminance standardization the stage-1→2 boundary is still the largest step in 9 of 10 tools for edge strength (share 0.74) and luminance sd; the texture itself changes at the stage change | No change now: the plan's formal test is the Gate-1 probe on encoder features. Expected outcome: the workpiece photos fail and leave the headline model and the Shapley study (the study would then have 3 players: force, tool, chip) | Recorded |
+| S2-3 | The plan's worked example used estimated seconds (τ ≈ 923 s, RUL ≈ 904 s) | Replaced with the traced values: τ = 909.7 s, RUL = 917.3 s | Plan §3.2 updated |
+
+### Problems found and fixed
+
+1. **Stale docstring behaviour.** `relative_to_first` returned unchanged values before
+   the first valid row instead of 0. Fixed before the tests ran.
+2. **Weak test assertion.** A segment-count assertion mixed positions of different tools;
+   it was replaced by a per-pass check.
+3. **Typing.** Four pyright errors (annotations); fixed.
+
+### Suggested commits (you commit)
+
+1. "Stage 2: segment store, images, normalization, channels":
+   - `pyproject.toml`, `rulfuse/cli.py`;
+   - `rulfuse/data/{dataset,force_store,segment_store,images,normalization,channels}.py`;
+   - `rulfuse/features/`.
+2. "Stage 2 tests":
+   - `tests/helpers.py`;
+   - `tests/test_{segment_store,images,normalization,channels}.py`.
+3. "Stage 2 validation and docs":
+   - `scripts/{validate_stage2,end_to_end_trace}.py`;
+   - `docs/END_TO_END.md`, `PROJECT_PLAN.md`, `PROJECT_LOG.md`.
+
+### Next: Stage 3 (features, Ruche bring-up, Gate 1)
+
+1. The rest of encoder H (band energies, spindle-line energy, spectral centroid and
+   entropy, synchronous average).
+2. The `encoders` extra (torch, transformers, momentfm, mantis-tsfm, chronos-forecasting)
+   and the Project 14 wrappers.
+3. The feature cache keyed by distinct segment (3,777) and photo.
+4. The Ruche setup and jobs J0-J4.
+5. Gate 1: VB-probe ranking, the derived channels, the cross-fitted readouts, and the
+   stage-step leakage probe for every photo type.
