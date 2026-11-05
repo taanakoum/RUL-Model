@@ -1602,8 +1602,11 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J11 | 8 | Shapley: 7 coalitions × 10 folds (15 if the workpiece passes) | 70 (150) | 210 (450) | 5 (11) GPU-h |
 | J12 | 8 | Sensitivity tier 1 (5 refit arms) / tier 2 (up to 9 arms + features) | 50 / 90 | 150 / 270 | 4 / 8 GPU-h |
 | J13 | 9 | Report | 1 | – | 15 min |
+| B6-P | 3 (after J3) | B6 OmniFuser-RUL pilot and caches (`b6-pilot`, `b6-prepare`) | 2 | 1 | 30 min |
+| B6-S | 5-6 | B6 study: 11 arms × 10 folds × 3 seeds (`slurm/omnifuser_rul.sh`; docs/OMNIFUSER_RUL_PLAN.md §8) | 11 | 330 | about 16 GPU-h |
+| B6-R | 6, and after 2026-12-01 | B6 results (`slurm/omnifuser_results.sh`; validation, then the sealed test read) | 1-2 | – | 5 min each |
 
-The total is about 40-50 A100-hours (the Stage-3 feature job adds under one). Submit arrays in the evening; run
+The total is about 40-50 A100-hours for RUL-Fuse (the Stage-3 feature job adds under one), plus about 16 for baseline B6. Submit arrays in the evening; run
 `status.sh` each morning.
 
 ### 16.5 Safe practice

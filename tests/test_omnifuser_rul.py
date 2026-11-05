@@ -9,20 +9,26 @@ from datetime import date
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
-import torch
-from torch import nn
 
-from rulfuse.adapters import toy
-from rulfuse.baselines import score_usage_baselines
-from rulfuse.core.folds import leave_one_unit_out
-from rulfuse.core.schema import TIME_TOLERANCE_S
-from rulfuse.core.store import SegmentStore, build_segment_store
-from rulfuse.features.cache import extract_signal_features
-from rulfuse.features.encoders import ProjectionEncoder
-from rulfuse.omnifuser_rul import aggregate, data
-from rulfuse.omnifuser_rul.model import OmniFuserRUL
-from rulfuse.omnifuser_rul.study import modality_arms
-from rulfuse.omnifuser_rul.train import ArmSpec, arm_dir, run_arm, select_epoch
+# B6 needs the `omnifuser` extra (OmniFuser v1.1 and torchvision). Without it these tests
+# skip instead of breaking the collection of the whole suite (Ruche job J0 runs it).
+pytest.importorskip("torchvision", reason="B6 needs torchvision (the omnifuser extra)")
+pytest.importorskip("omnifuser", reason="B6 needs OmniFuser v1.1 (the omnifuser extra)")
+
+import torch  # noqa: E402
+from torch import nn  # noqa: E402
+
+from rulfuse.adapters import toy  # noqa: E402
+from rulfuse.baselines import score_usage_baselines  # noqa: E402
+from rulfuse.core.folds import leave_one_unit_out  # noqa: E402
+from rulfuse.core.schema import TIME_TOLERANCE_S  # noqa: E402
+from rulfuse.core.store import SegmentStore, build_segment_store  # noqa: E402
+from rulfuse.features.cache import extract_signal_features  # noqa: E402
+from rulfuse.features.encoders import ProjectionEncoder  # noqa: E402
+from rulfuse.omnifuser_rul import aggregate, data  # noqa: E402
+from rulfuse.omnifuser_rul.model import OmniFuserRUL  # noqa: E402
+from rulfuse.omnifuser_rul.study import modality_arms  # noqa: E402
+from rulfuse.omnifuser_rul.train import ArmSpec, arm_dir, run_arm, select_epoch  # noqa: E402
 
 KINDS = ["surface"]
 
@@ -409,3 +415,118 @@ def test_a_cache_key_with_tuples_is_found_again(tmp_path):
     np.testing.assert_array_equal(data._load(tmp_path, key), np.arange(3.0))
     with pytest.raises(ValueError, match="mismatch"):
         data._load(tmp_path, {**key, "version": 2})
+
+
+# ----------------------------------------------------------------------------- results
+
+
+def _fake_study(store, root, players, bias, seeds=(0,)):
+    """Write every fit of a study as ``fit()`` does, with predictions = target + the arm's
+    bias, so each arm's window MAE is known exactly."""
+    import json
+
+    import pyarrow as pa
+
+    base = ArmSpec(players=(), seeds=seeds, epochs=5)
+    seg = store.segments
+    folds = leave_one_unit_out(store.unit_names)
+    for spec in modality_arms(players, base):
+        for index, fold in enumerate(folds, start=1):
+            for seed in seeds:
+                out = arm_dir(root, store, spec) / f"fold-{index:02d}" / f"seed-{seed}"
+                out.mkdir(parents=True, exist_ok=True)
+                rows, units, roles = [], [], []
+                for role, unit in (("validation", fold.validation), ("test", fold.test)):
+                    mine = np.flatnonzero((seg["unit"] == unit) & seg["is_prediction_point"])
+                    rows.append(mine)
+                    units += [unit] * len(mine)
+                    roles += [role] * len(mine)
+                rows_all = np.concatenate(rows)
+                table = pa.table(
+                    {
+                        "row": rows_all,
+                        "unit": units,
+                        "role": roles,
+                        "fold": np.full(len(roles), index),
+                        "seed": np.full(len(roles), seed),
+                        "prediction_s": seg["y_s"][rows_all] + bias[spec.name],
+                    }
+                )
+                pq.write_table(table, out / "predictions.parquet")
+                record = {
+                    "fold": index,
+                    "seed": seed,
+                    "selected_epoch": 2,
+                    "validation_mae_s": [9.0, 8.0, 7.5, 7.6, 7.7],
+                    "seconds": 12.0,
+                    "spec": spec.signature(),
+                }
+                (out / "fit.json").write_text(json.dumps(record), encoding="utf-8")
+    return base
+
+
+BIAS = {
+    "usage-only": 400.0,
+    "force": 120.0,
+    "surface": 60.0,
+    "force+surface": 30.0,
+    "force-nousage": 200.0,
+    "surface-nousage": 150.0,
+    "force+surface-dropout0.2": 35.0,
+}
+
+
+def test_results_report_progress_scores_and_choices_before_the_freeze(toy_b6, tmp_path):
+    import json
+
+    from rulfuse.omnifuser_rul.report import write_results
+
+    _, store, *_ = toy_b6
+    players = ["force", "surface"]
+    base = _fake_study(store, tmp_path, players, BIAS)
+    out = write_results(store, tmp_path, players, base, today=date(2026, 11, 20))
+    progress = {a["arm"]: a for a in json.loads((out / "progress.json").read_text())}
+    assert set(progress) == set(BIAS) and all(a["complete"] for a in progress.values())
+    assert all(a["done"] == a["expected"] == 5 for a in progress.values())  # 5 folds x 1 seed
+    validation = json.loads((out / "analysis-validation.json").read_text())["validation"]
+    for arm, bias in BIAS.items():  # predictions = y + bias: the window MAE is the bias
+        assert validation[arm]["summary"]["window_mae"]["mean"] == pytest.approx(bias)
+    choices = json.loads((out / "choices.json").read_text())
+    assert choices["best_single"] == ["surface"] and choices["best_pair"] == ["force", "surface"]
+    assert choices["complete"] is True
+    text = (out / "RESULTS.md").read_text(encoding="utf-8")
+    assert "Sealed until 2026-12-01" in text and "| surface | 5/5 |" in text
+    assert not (out / "analysis-test.json").exists()  # nothing about the test units yet
+    curves = (out / "curves.csv").read_text().splitlines()
+    assert len(curves) == 1 + len(BIAS) * 5 * 5  # header + arms x fits x epochs
+
+
+def test_results_test_read_needs_the_freeze_and_a_complete_study(toy_b6, tmp_path):
+    import json
+
+    from rulfuse.omnifuser_rul.report import IncompleteStudy, write_results
+
+    _, store, *_ = toy_b6
+    players = ["force", "surface"]
+    base = _fake_study(store, tmp_path, players, BIAS)
+    write_results(store, tmp_path, players, base)  # records the choices before the test read
+    with pytest.raises(aggregate.TestSealed):
+        write_results(store, tmp_path, players, base, after_freeze=True, today=date(2026, 11, 30))
+    out = write_results(store, tmp_path, players, base, after_freeze=True, today=date(2026, 12, 1))
+    test = json.loads((out / "analysis-test.json").read_text())
+    assert test["test"]["surface"]["summary"]["window_mae"]["mean"] == pytest.approx(60.0)
+    shapley = test["modality"]["shapley"]
+    # Two players, v(S) = -MAE: φ_surface - φ_force = v(surface) - v(force) = 120 - 60 = 60 s
+    # whatever v(∅) is; efficiency: φ_surface + φ_force = MAE(∅) - MAE(both).
+    assert shapley["surface"]["mean"] - shapley["force"]["mean"] == pytest.approx(60.0)
+    empty = test["empty_coalition"]
+    assert empty == "B2"  # B2 beats the usage-only arm (bias 400 s) on validation
+    b2_test = np.mean(list(aggregate.b2_by_unit(store, "test").values()))
+    total = shapley["surface"]["mean"] + shapley["force"]["mean"]
+    assert total == pytest.approx(b2_test - 30.0)
+    text = (out / "RESULTS.md").read_text(encoding="utf-8")
+    assert "Shapley values" in text and "recorded before the test read: **True**" in text
+    missing = arm_dir(tmp_path, store, replace(base, players=("force",))) / "fold-03" / "seed-0"
+    (missing / "fit.json").unlink()  # one fit lost: no test read on an incomplete study
+    with pytest.raises(IncompleteStudy):
+        write_results(store, tmp_path, players, base, after_freeze=True, today=date(2026, 12, 1))

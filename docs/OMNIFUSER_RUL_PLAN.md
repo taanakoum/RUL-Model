@@ -381,9 +381,12 @@ rulfuse/omnifuser_rul/
   train.py       one fit and one arm: training, selection, predictions, resume
   study.py       arm definitions (§8) and the analysis
   aggregate.py   scores, ensembles, Shapley, two-versus-one tests, test seal
-rulfuse/cli.py   omnifuser-prepare | omnifuser-arm | omnifuser-study | omnifuser-analyse
+  report.py      results: progress, scores, choices fixed on validation, RESULTS.md
+rulfuse/cli.py   omnifuser-prepare | omnifuser-arm | omnifuser-study | omnifuser-analyse |
+                 omnifuser-results
 tests/test_omnifuser_rul.py
-slurm/omnifuser_rul.sh   one cache job, then one job per arm (10 folds × 3 seeds)
+slurm/omnifuser_rul.sh       guards, then one cache job and one job per arm (10 folds × 3 seeds)
+slurm/omnifuser_results.sh   the results job: RESULTS.md and the archive to copy home
 ```
 
 The dependency is the `omnifuser` extra of `pyproject.toml`
@@ -394,8 +397,10 @@ from the store. Only `rulfuse/cli.py` loads the dataset.
 
 ## 14. Implementation status
 
-2026-11-05. Implemented in OmniFuser `v1.1` (branch `release-1.1`) and in this
-project (`rulfuse/omnifuser_rul/`). Nothing is committed yet.
+2026-11-05. Implemented in OmniFuser `v1.1` and in this project
+(`rulfuse/omnifuser_rul/`). Committed: this project `7a3d274`; OmniFuser `v1.1` is
+commit `eac0fed` on `main`, tag `v1.1` pushed to GitHub (checked 2026-11-05 with
+`git ls-remote`). Reviewed the same day (below, "Review of the implementation").
 
 **Refinements of the plan, found while implementing:**
 
@@ -423,15 +428,41 @@ project (`rulfuse/omnifuser_rul/`). Nothing is committed yet.
 | V-9 | Test scores raise `TestSealed` before 2026-12-01 and without `--after-freeze` |
 | V-10 | The transfer-contract tests pass with `omnifuser_rul` in the generic list |
 | V-11 | Real data, laptop CPU (3 threads): `omnifuser-prepare` builds the caches (3,747 prediction points over 10 tools, 1,536 photo features); one fit of force + tool + chip on fold 1 for 2 epochs takes 111 s, keeps epoch 2, and writes 393 validation points for T2 (116 in the window, as in plan §2.2). Its validation window MAE after 2 epochs is 515 s against B2's 228 s on that tool: a smoke run, not a result. Test scoring is refused (sealed) |
+| V-12 | Results extraction (added in the review): on fake studies with known errors, `write_results` counts fits and names the missing ones, scores each arm exactly, fixes the comparisons on validation, seals the test units before 2026-12-01, refuses a test read of an incomplete study, and after the freeze reproduces the Shapley identities (φ_a − φ_b = v(a) − v(b); efficiency) and confirms the recorded choices. Run end to end on the real store with an 11-arm fake study (one fit missing) through `rulfuse omnifuser-results` |
 
-The RUL project's suite: 130 tests pass, 2 skip (the Mantis and DINOv2 weight
-tests, which run on Ruche); ruff and pyright report no issues.
+The RUL project's suite at the commit: 130 tests, of which 128 pass and 2 skip (the Mantis
+and DINOv2 weight tests, which run on Ruche); ruff and pyright report no issues. After the
+review: 132 tests, 130 pass, the same 2 skip.
+
+**Review of the implementation (2026-11-05).** The model, data and training follow §3-§8:
+
+- photo visibility uses the store's strict `available_s < τ` rule;
+- windows only look back;
+- weights, standardization, selection and the seal are as planned;
+- Shapley values and the paired tests are computed exactly.
+
+Findings and fixes:
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| R-1 | Blocker | `tests/test_omnifuser_rul.py` imported OmniFuser at collection. On Ruche, Stage-3 job J0 runs the whole suite before B6 is installed, so collection failed (simulated: exit code 2, zero tests run), J0 failed and J2, J3 never started | The module skips without OmniFuser or torchvision (`pytest.importorskip`); and the runbook's one-time setup (§7.2) now installs the `omnifuser` extra, so J0 also tests B6 |
+| R-2 | Major | The runbook installed torchvision as `torchvision==<the version matching your torch>`, a placeholder, after the setup | torch and torchvision installed together from the CUDA 12.6 index (pip pairs them), then `pip install -e ".[test,encoders,omnifuser]"`; an upgrade block for an existing environment |
+| R-3 | Major | Nothing checked that the B6 photo types are the ones Stage 3 admitted (O5), or that Stage 3 had run | `slurm/omnifuser_rul.sh` refuses without the force store, without a feature-check report, or with a type the report excluded (override only for a pilot) |
+| R-4 | Major | Results stopped at a validation JSON: no completeness check, no record of the comparisons before the test read, no report, no way home | `rulfuse omnifuser-results` (`report.py`) and `slurm/omnifuser_results.sh` (§12.2 of the runbook): progress, curves, per-unit scores against B2, `choices.json` written before the freeze and checked after it, `RESULTS.md`, and one archive with its sha256 |
+| R-5 | Minor | J0 proved offline loading for Mantis and DINOv2 but not for EfficientNet-B0, which `b6-prepare` needs offline | J0 checks the file in `$TORCH_HOME` and loads it, when OmniFuser is installed |
+| R-6 | Minor | `status.sh` did not show B6 | A `B6 study` block: fits per arm |
+| R-7 | Minor | If the arm listing failed, `omnifuser_rul.sh` still submitted the cache job and no arm | The arms are listed first; an empty list stops the script |
+| R-8 | Note | The data loader runs in the main process (`num_workers=0`), so a fit may be slower than the 3-minute estimate on a GPU node | Measured by the pilot (the runbook asks to report a fit far above 3 min) |
+| R-9 | Note | The log said "130 tests pass, 2 skip"; the commit had 130 tests, 128 passing | Corrected here |
 
 **What remains:**
 
-1. Commit both repositories and push OmniFuser's tag `v1.1`.
-2. Install on Ruche (`docs/RUCHE_RUNBOOK.md` §12.1).
-3. Submit after the Stage-3 photo decision: the pilot, then
-   `bash slurm/omnifuser_rul.sh force tool chip` (with `work` only if it is
-   admitted).
+1. Install on Ruche (`docs/RUCHE_RUNBOOK.md` §7.2, which now includes B6) and fetch the
+   EfficientNet-B0 weights (§8).
+2. After the Stage-3 photo decision (J3): the pilot, then
+   `bash slurm/omnifuser_rul.sh force tool chip` (with `work` only if it is admitted);
+   runbook §12.1.
+3. When every arm is complete, and before 2026-12-01: the results job (runbook §12.2),
+   which records the comparisons in `choices.json`; copy the archive home (§13).
+4. From 2026-12-01: the same job with `--after-freeze` for the test read.
 

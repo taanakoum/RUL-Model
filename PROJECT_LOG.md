@@ -12,7 +12,7 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
 | S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
 | S3 Core/adapter refactor, features, feature check | **Code done** (2026-11-05); **Ruche jobs J0-J3 waiting for you** | Refactored store identical to Stage 2's; 111 tests (109 pass, 2 need the weights: they run in J0); ruff and pyright clean; [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) |
-| B6 OmniFuser-RUL (D20) | **Code done** (2026-11-05); Ruche runs after the Stage-3 photo decision | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) §14; 130 tests (2 need the weights); real-data smoke fit runs |
+| B6 OmniFuser-RUL (D20) | **Code done and reviewed** (2026-11-05); **ready for Ruche** once Stage 3's photo decision exists; results extraction ready | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) §14 (review R-1 to R-9); runbook §12.1-§12.2; 132 tests (130 pass; 2 need the weights) |
 | S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
@@ -28,6 +28,9 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
    Ruche: [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) Part A once, then
    `bash slurm/stage3.sh` (§11). I cannot log in to Ruche: it needs your password.
 2. Copy the report and the caches home (§13) and tell me; I then log the decisions.
+3. B6 (after J3): the pilot, then `bash slurm/omnifuser_rul.sh force <admitted types>`;
+   when every arm is complete and before 2026-12-01, the results job (runbook §12.2); copy
+   the archive home (§13) and tell me. The test read follows from 2026-12-01.
 
 Plan §19 questions 3-7 run on their defaults.
 
@@ -563,3 +566,83 @@ correctly with this environment's torch 2.15.
    `slurm/env.sh`, `slurm/prefetch_weights.sh`, `pyproject.toml`, `docs/RUCHE_RUNBOOK.md`,
    `docs/OMNIFUSER_RUL_PLAN.md`, `PROJECT_PLAN.md`, `PROJECT_LOG.md`.
 
+
+
+---
+
+## Review: the OmniFuser-RUL baseline and the runbook (2026-11-05)
+
+Your request: review the changes that accommodate the OmniFuser model (commit `7a3d274`)
+and the new runbook; make the results of training and testing extractable when the runs
+finish on Ruche; update the docs if everything is ready for Ruche training.
+
+### Verdict
+
+The B6 design and code are sound and faithful to `docs/OMNIFUSER_RUL_PLAN.md`:
+
+- the store's strict photo-availability rule, and windows that only look back;
+- the shared point weights, standardization on the training tools, and the
+  centre-of-triple epoch selection;
+- the test seal (D15) and exact Shapley values;
+- OmniFuser `v1.1` is published (tag `v1.1` = `eac0fed` on `main`), so Ruche installs the
+  code tested here.
+
+It was **not ready for Ruche** because of one blocker and three gaps, all fixed now (R-1
+to R-4 below). After the fixes, the Stage-3 and B6 jobs are ready to submit.
+
+### Findings and fixes
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| R-1 | Blocker | `tests/test_omnifuser_rul.py` imported OmniFuser at collection. The runbook's setup did not install it, so Stage-3 job J0 (which runs the whole suite) would fail at collection, and J2 and J3 would never start. Reproduced by hiding OmniFuser: exit code 2, zero tests run | The module skips without OmniFuser or torchvision; the setup (§7.2) installs the `omnifuser` extra, so J0 tests B6 on Ruche too |
+| R-2 | Major | torchvision was to be installed as `torchvision==<the version matching your torch>` (a placeholder) | torch and torchvision installed together from the CUDA 12.6 index; one `pip install -e ".[test,encoders,omnifuser]"`; an upgrade block for an existing environment |
+| R-3 | Major | Nothing enforced that B6 uses exactly the photo types Stage 3 admitted (O5), or that Stage 3 had run | Guards in `slurm/omnifuser_rul.sh`, tested on fake Stage-3 outputs (an excluded type refused; admitted types submitted; no store refused) |
+| R-4 | Major | Results stopped at a validation JSON, with no completeness check, no comparisons recorded before the test read, no report and no way home | `rulfuse omnifuser-results` (`rulfuse/omnifuser_rul/report.py`) and `slurm/omnifuser_results.sh`; runbook §12.2 and §13 |
+| R-5 | Minor | J0 did not prove that EfficientNet-B0 loads offline | J0 checks `$TORCH_HOME` and loads it |
+| R-6 | Minor | `status.sh` did not show B6 | A `B6 study` block with fits per arm |
+| R-7 | Minor | A failed arm listing still submitted the cache job | Arms listed first; an empty list stops the script |
+| R-8 | Note | The data loader runs in the main process; a fit may take longer than the 3-minute estimate | The pilot measures it; the runbook says when to report |
+| R-9 | Note | The B6 entry said "130 tests pass, 2 skip"; the commit had 130 tests (128 pass) | Corrected in the B6 plan §14 |
+
+### Extracting the results (what you run on Ruche)
+
+1. When `bash slurm/status.sh` shows every B6 arm `complete`:
+   `sbatch --job-name=b6-results slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip`.
+2. It writes `runs/omnifuser_rul/nonastreda-<store>/results/`:
+   - `RESULTS.md`;
+   - `progress.json`, `curves.csv`;
+   - the validation scores per tool against B2;
+   - `choices.json`, the comparisons fixed on validation.
+
+   It also packs everything into `$WORKDIR/b6-results-<date>.tar.gz` with its sha256.
+3. Copy it home and unpack it into `D:\RULModel\runs` (runbook §13); the report can be
+   rebuilt on the laptop in seconds.
+4. **Test results:** the test predictions are in the archive, but scoring them is sealed
+   until 2026-12-01 (D15, your decision O3). From that date the same job with
+   `--after-freeze` adds:
+   - the test table;
+   - the Shapley values and the paired tests;
+   - a check against `choices.json`.
+
+   It refuses an incomplete study.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| Suite | 132 tests: 130 pass, 2 skip (the Mantis and DINOv2 checkpoint tests, which run in J0); ruff and pyright clean |
+| Without OmniFuser installed (Ruche before §7.2's extra) | The suite passes with the B6 module skipped (exit 0) |
+| `report.py` tests | Fake studies with known errors: exact scores, progress, choices, seal before the freeze, refusal of an incomplete study, Shapley identities after it |
+| End to end on the real store | An 11-arm fake study (330 fits, one missing) through `rulfuse omnifuser-results`: the missing fit is named, scores and choices are written, the test read is refused before the freeze with a clean message (exit 2); the fake runs were deleted |
+| Scripts | `bash -n` on every SLURM script; LF line endings; `status.sh` and the `omnifuser_rul.sh` guards dry-run on fake trees |
+| Weights on the laptop | None added: the EfficientNet-B0 checkpoint in `~\.cache\torch` dates from 2026-10-14 (the OmniFuser project); the B6 caches under `D:\RULModel\interim\features` (8 MB) are features |
+
+### Suggested commit (you commit)
+
+"B6 review: Ruche readiness and results extraction":
+- `tests/test_omnifuser_rul.py`;
+- `rulfuse/omnifuser_rul/report.py`, `rulfuse/cli.py`;
+- `slurm/checks.sbatch`, `slurm/omnifuser_rul.sh`, `slurm/omnifuser_results.sh`,
+  `slurm/status.sh`;
+- `docs/RUCHE_RUNBOOK.md`, `docs/OMNIFUSER_RUL_PLAN.md`, `PROJECT_PLAN.md`,
+  `PROJECT_LOG.md`.

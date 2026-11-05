@@ -262,11 +262,39 @@ def cmd_omnifuser_analyse(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_omnifuser_results(args: argparse.Namespace) -> int:
+    """Progress, scores, the pre-registered choices and RESULTS.md of a B6 study."""
+    import json as _json
+
+    from rulfuse.core.store import SegmentStore, build_segment_store
+    from rulfuse.omnifuser_rul.aggregate import TestSealed
+    from rulfuse.omnifuser_rul.report import IncompleteStudy, write_results
+
+    store = SegmentStore.open(build_segment_store(_dataset(args)))
+    try:
+        out = write_results(
+            store, args.runs_root, args.players, _arm_spec(args, []), args.after_freeze, args.out
+        )
+    except (TestSealed, IncompleteStudy) as error:
+        print(f"refused: {error} (the validation results were written)", file=sys.stderr)
+        return 2
+    progress = _json.loads((out / "progress.json").read_text(encoding="utf-8"))
+    for arm in progress:
+        state = "complete" if arm["complete"] else f"{len(arm['missing'])} fits missing"
+        print(f"{arm['arm']:28s} {arm['done']:3d}/{arm['expected']} fits  {state}")
+    print(f"wrote {out} (RESULTS.md, progress.json, curves.csv, validation_per_unit.csv, ...)")
+    return 0
+
+
 def _add_omnifuser_options(p: argparse.ArgumentParser, players: bool = True) -> None:
     _add_dataset_options(p)
     if players:
-        p.add_argument("--players", nargs="*", default=["force"],
-                       help="'force' and/or image types of the store (empty: usage only)")
+        p.add_argument(
+            "--players",
+            nargs="*",
+            default=["force"],
+            help="'force' and/or image types of the store (empty: usage only)",
+        )
     p.add_argument("--no-usage", action="store_true", help="usage inputs off (Q4 arms)")
     p.add_argument("--modality-dropout", type=float, default=0.0)
     p.add_argument("--epochs", type=int, default=30)
@@ -376,6 +404,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--after-freeze", action="store_true", help="also score the test units (D15)")
     p.add_argument("--out", type=Path, default=None)
     p.set_defaults(func=cmd_omnifuser_analyse)
+
+    p = sub.add_parser(
+        "omnifuser-results", help="B6 OmniFuser-RUL: progress, scores, choices, RESULTS.md"
+    )
+    _add_omnifuser_options(p)
+    p.add_argument("--after-freeze", action="store_true", help="also score the test units (D15)")
+    p.add_argument("--out", type=Path, default=None, help="default: <runs-root>/<store>/results")
+    p.set_defaults(func=cmd_omnifuser_results)
 
     p = sub.add_parser("hub-check", help="planned checkpoints exist / gated (metadata only)")
     p.add_argument("--out", type=Path, default=paths.runs_dir() / "verify" / "hub-check.json")

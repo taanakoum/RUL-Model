@@ -47,6 +47,26 @@ for encoder in (MantisEncoder(device="cpu", batch_size=4), DinoV2Encoder(device=
     assert signature["revision"], f"{signature['repo']}: no cached revision"
     print("ok", signature)
 PY
+echo "=== offline weights for B6 (EfficientNet-B0 in \$TORCH_HOME), if OmniFuser is installed"
+python - <<'PY'
+import importlib.util
+import os
+
+if importlib.util.find_spec("omnifuser") is None or importlib.util.find_spec("torchvision") is None:
+    print("B6 not installed (docs/RUCHE_RUNBOOK.md §7.2): skipped")
+else:
+    import omnifuser
+    import torch
+    import torchvision
+    from torchvision.models import EfficientNet_B0_Weights, efficientnet_b0
+
+    file = EfficientNet_B0_Weights.IMAGENET1K_V1.url.rsplit("/", 1)[-1]
+    path = os.path.join(torch.hub.get_dir(), "checkpoints", file)
+    assert os.path.isfile(path), f"{path} missing: run slurm/prefetch_weights.sh on the login node"
+    efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1)  # loads from the cache
+    print("ok efficientnet_b0", path, "| omnifuser", omnifuser.__version__,
+          "| torch", torch.__version__, "| torchvision", torchvision.__version__)
+PY
 echo "=== tests (synthetic, real data, real weights)"
 python -m pytest -o addopts= -q -rs tests
 echo "finished $(date)"

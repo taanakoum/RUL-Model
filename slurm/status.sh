@@ -40,6 +40,32 @@ for report in sorted(glob.glob(os.path.join(root, "runs", "feature-check", "*.js
     with open(report, encoding="utf-8") as f:
         r = json.load(f)
     print(f"  feature check {os.path.basename(report)}: {json.dumps(r.get('decisions'))}")
+
+# B6 OmniFuser-RUL: fits done per arm (fold x seed folders with a fit.json)
+for study in sorted(glob.glob(os.path.join(root, "runs", "omnifuser_rul", "*-*"))):
+    if not os.path.isdir(study) or os.path.basename(study) in ("logs",):
+        continue
+    dataset, _, sig = os.path.basename(study).rpartition("-")
+    units = 10
+    meta = os.path.join(root, "interim", "segments", dataset, sig, "meta.json")
+    if os.path.isfile(meta):
+        with open(meta, encoding="utf-8") as f:
+            units = json.load(f)["counts"]["units"]
+    arms = sorted(glob.glob(os.path.join(study, "*", "arm.json")))
+    total = expected_all = 0
+    print(f"  B6 study {os.path.basename(study)}: {len(arms)} arms")
+    for arm in arms:
+        with open(arm, encoding="utf-8") as f:
+            seeds = len(json.load(f)["spec"]["seeds"])
+        done = len(glob.glob(os.path.join(os.path.dirname(arm), "fold-*", "seed-*", "fit.json")))
+        expected = units * seeds
+        total, expected_all = total + done, expected_all + expected
+        state = "complete" if done >= expected else f"{done}/{expected}"
+        print(f"    {os.path.basename(os.path.dirname(arm)):30s} {state}")
+    if arms:
+        print(f"    all arms: {total}/{expected_all} fits")
+    if os.path.isfile(os.path.join(study, "results", "RESULTS.md")):
+        print(f"    results: {os.path.join(study, 'results', 'RESULTS.md')}")
 EOF
 
 echo
