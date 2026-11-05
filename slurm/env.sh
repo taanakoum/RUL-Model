@@ -18,6 +18,7 @@ source activate "$CONDA_ENV"
 
 export RULFUSE_DATA_ROOT="$WORKDIR/rul_data"  # raw/, interim/ (stores, caches), runs/
 export HF_HOME="$WORKDIR/hf_cache"            # model weights, downloaded on the login node
+export TORCH_HOME="$WORKDIR/torch_cache"      # torchvision weights (B6's EfficientNet-B0), same
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     export HF_HUB_OFFLINE=1                   # compute nodes read weights from the cache only
     export TRANSFORMERS_OFFLINE=1

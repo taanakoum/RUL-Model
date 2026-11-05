@@ -12,6 +12,7 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
 | S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
 | S3 Core/adapter refactor, features, feature check | **Code done** (2026-11-05); **Ruche jobs J0-J3 waiting for you** | Refactored store identical to Stage 2's; 111 tests (109 pass, 2 need the weights: they run in J0); ruff and pyright clean; [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) |
+| B6 OmniFuser-RUL (D20) | **Code done** (2026-11-05); Ruche runs after the Stage-3 photo decision | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) §14; 130 tests (2 need the weights); real-data smoke fit runs |
 | S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
@@ -515,3 +516,50 @@ expected log lines and acceptance rules are in the runbook (§11.2, §11.4).
    force go/no-go, and update the plan if a type is excluded.
 3. Stage 4 (training engine) can start in parallel: it needs only the schema and the cache
    layout, which are fixed.
+
+## Baseline B6: OmniFuser-RUL (2026-11-05)
+
+A separate model and an additional baseline (D20): OmniFuser's architecture on this
+project's targets, inputs, folds, weights, selection and metrics. Plan:
+[docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) (version 2, reviewed); §14 there
+is the full implementation record.
+
+### Built
+
+| Part | Where |
+|---|---|
+| OmniFuser v1.1: `encode()` (outputs bit-identical to v1.0) and `image_views` | OmniFuser repository, branch `release-1.1` (tag `v1.1` to push) |
+| Step tables, descriptor and photo-feature caches, windows | `rulfuse/omnifuser_rul/data.py` |
+| Model: OmniFuser `encode()` + an RUL head; input switches for force, photos, usage | `rulfuse/omnifuser_rul/model.py` |
+| One fit and one arm (resumable), study arms, analysis | `rulfuse/omnifuser_rul/{train,study}.py` |
+| Scores, seed ensembles, Shapley values, two-versus-one tests, test seal (D15) | `rulfuse/omnifuser_rul/aggregate.py` |
+| Commands `omnifuser-prepare`, `omnifuser-arm`, `omnifuser-study`, `omnifuser-analyse` | `rulfuse/cli.py` |
+| Ruche: one cache job and one job per arm | `slurm/omnifuser_rul.sh`; `docs/RUCHE_RUNBOOK.md` §12.1 |
+| Dependencies | the `omnifuser` extra in `pyproject.toml`; `TORCH_HOME` in `slurm/env.sh`; EfficientNet-B0 in `slurm/prefetch_weights.sh` |
+
+### Verification
+
+All checks V-1 to V-11 of the plan pass (plan §14). The project's suite: 130 tests pass,
+2 skip (the Mantis and DINOv2 weight tests); ruff and pyright are clean. The laptop
+environment needed torchvision: 0.29.2 is the newest published, and it runs EfficientNet-B0
+correctly with this environment's torch 2.15.
+
+### Problems found and fixed
+
+1. Finished fits were never reused: the saved settings came back from JSON with lists
+   where the settings had tuples. Now compared in JSON form.
+2. The same in the photo-feature cache's key (the tool crop), found by the real-data run.
+3. Photos switched off still depended on the data passing an all-zero first slot; the model
+   now zeroes them itself.
+4. Epoch selection let a 2-value average at the first epoch win; now only complete triples
+   of 3 consecutive values count.
+
+### Suggested commits (you commit)
+
+1. OmniFuser: "v1.1: encode() and image views" (branch `release-1.1`, staged), merge to
+   `main`, then `git tag -a v1.1 -m "OmniFuser v1.1" && git push origin main v1.1`.
+2. This project: "B6 OmniFuser-RUL baseline": `rulfuse/omnifuser_rul/`, `rulfuse/cli.py`,
+   `tests/test_omnifuser_rul.py`, `tests/test_transfer_contract.py`, `slurm/omnifuser_rul.sh`,
+   `slurm/env.sh`, `slurm/prefetch_weights.sh`, `pyproject.toml`, `docs/RUCHE_RUNBOOK.md`,
+   `docs/OMNIFUSER_RUL_PLAN.md`, `PROJECT_PLAN.md`, `PROJECT_LOG.md`.
+

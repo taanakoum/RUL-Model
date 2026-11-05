@@ -185,6 +185,98 @@ def cmd_baselines(args: argparse.Namespace) -> int:
     return 0
 
 
+def _omnifuser_inputs(args: argparse.Namespace):
+    """Store, step tables, photo features and image types for OmniFuser-RUL (B6, D20)."""
+    from rulfuse.omnifuser_rul import data
+
+    ds, store = _dataset_and_store(args)
+    kinds = sorted(store.image_specs)
+    steps = data.build_steps(store, data.descriptor_cache(store, ds.signals), kinds)
+    features = data.image_feature_cache(store, device=args.feature_device)
+    return store, steps, features, kinds
+
+
+def _arm_spec(args: argparse.Namespace, players: list[str]):
+    from rulfuse.omnifuser_rul.train import ArmSpec
+
+    return ArmSpec(
+        players=tuple(players),
+        usage=not args.no_usage,
+        modality_dropout=args.modality_dropout,
+        epochs=args.epochs,
+        seeds=tuple(args.seeds),
+    )
+
+
+def cmd_omnifuser_prepare(args: argparse.Namespace) -> int:
+    store, steps, features, kinds = _omnifuser_inputs(args)
+    points = sum(int(u.point.sum()) for u in steps.values())
+    print(f"store {store.dataset}/{store.signature}: {len(steps)} units, {points} points")
+    print(f"image types {kinds}; photo features {features.shape}")
+    return 0
+
+
+def cmd_omnifuser_arm(args: argparse.Namespace) -> int:
+    from rulfuse.omnifuser_rul.train import run_arm
+
+    store, steps, features, kinds = _omnifuser_inputs(args)
+    spec = _arm_spec(args, args.players)
+    folder = run_arm(store, steps, features, kinds, spec, args.runs_root, args.folds, args.device)
+    print(f"arm {spec.name}: {folder}")
+    return 0
+
+
+def cmd_omnifuser_study(args: argparse.Namespace) -> int:
+    from rulfuse.omnifuser_rul.study import modality_arms
+    from rulfuse.omnifuser_rul.train import run_arm
+
+    arms = modality_arms(args.players, _arm_spec(args, []))
+    if args.list:  # one line per arm: its name, a tab, its omnifuser-arm options (no data read)
+        for spec in arms:
+            options = ["--players", *spec.players]
+            if not spec.usage:
+                options.append("--no-usage")
+            if spec.modality_dropout:
+                options += ["--modality-dropout", f"{spec.modality_dropout:g}"]
+            print(f"{spec.name}\t{' '.join(options)}")
+        return 0
+    store, steps, features, kinds = _omnifuser_inputs(args)
+    for spec in arms:
+        run_arm(store, steps, features, kinds, spec, args.runs_root, args.folds, args.device)
+    return 0
+
+
+def cmd_omnifuser_analyse(args: argparse.Namespace) -> int:
+    from rulfuse.core.store import SegmentStore, build_segment_store
+    from rulfuse.omnifuser_rul.study import analyse
+
+    store = SegmentStore.open(build_segment_store(_dataset(args)))
+    report = analyse(store, args.runs_root, args.players, _arm_spec(args, []), args.after_freeze)
+    out = args.out or args.runs_root / f"{store.dataset}-{store.signature}" / (
+        "analysis-test.json" if args.after_freeze else "analysis-validation.json"
+    )
+    _write_json(report, out)
+    for name, scores in report["validation"].items():
+        row = scores["summary"]["window_mae"]
+        print(f"{name:28s} validation window MAE {row['mean']:7.1f} s (pooled {row['pooled']:.1f})")
+    return 0
+
+
+def _add_omnifuser_options(p: argparse.ArgumentParser, players: bool = True) -> None:
+    _add_dataset_options(p)
+    if players:
+        p.add_argument("--players", nargs="*", default=["force"],
+                       help="'force' and/or image types of the store (empty: usage only)")
+    p.add_argument("--no-usage", action="store_true", help="usage inputs off (Q4 arms)")
+    p.add_argument("--modality-dropout", type=float, default=0.0)
+    p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
+    p.add_argument("--folds", type=int, nargs="*", default=None, help="1-based; default: all")
+    p.add_argument("--device", default="auto", help="training device: auto | cpu | cuda")
+    p.add_argument("--feature-device", default="cpu", help="photo-feature extraction device")
+    p.add_argument("--runs-root", type=Path, default=paths.runs_dir() / "omnifuser_rul")
+
+
 def _add_dataset_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--dataset", default="nonastreda", choices=["nonastreda"])
     p.add_argument(
@@ -265,6 +357,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", type=Path, default=paths.force_store_dir())
     p.add_argument("--min-memory-mb", type=float, default=1500.0)
     p.set_defaults(func=cmd_build_force_store)
+
+    p = sub.add_parser("omnifuser-prepare", help="B6 OmniFuser-RUL: descriptor and photo caches")
+    _add_omnifuser_options(p, players=False)
+    p.set_defaults(func=cmd_omnifuser_prepare)
+
+    p = sub.add_parser("omnifuser-arm", help="B6 OmniFuser-RUL: one arm, all folds x seeds")
+    _add_omnifuser_options(p)
+    p.set_defaults(func=cmd_omnifuser_arm)
+
+    p = sub.add_parser("omnifuser-study", help="B6 OmniFuser-RUL: every arm of the modality study")
+    _add_omnifuser_options(p)
+    p.add_argument("--list", action="store_true", help="print the arms and stop")
+    p.set_defaults(func=cmd_omnifuser_study)
+
+    p = sub.add_parser("omnifuser-analyse", help="B6 OmniFuser-RUL: scores, Shapley, 2-vs-1 test")
+    _add_omnifuser_options(p)
+    p.add_argument("--after-freeze", action="store_true", help="also score the test units (D15)")
+    p.add_argument("--out", type=Path, default=None)
+    p.set_defaults(func=cmd_omnifuser_analyse)
 
     p = sub.add_parser("hub-check", help="planned checkpoints exist / gated (metadata only)")
     p.add_argument("--out", type=Path, default=paths.runs_dir() / "verify" / "hub-check.json")

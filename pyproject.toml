@@ -30,6 +30,14 @@ encoders = [
     "safetensors>=0.4",
 ]
 
+# Baseline B6, OmniFuser-RUL (PROJECT_PLAN.md D20): OmniFuser v1.1 and torchvision. Install
+# torch first, as for the encoders; torchvision must match it (docs/RUCHE_RUNBOOK.md §12.1).
+omnifuser = [
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "omnifuser-reproduction @ git+https://github.com/taanakoum/OmniFuser@v1.1",
+]
+
 [project.scripts]
 rulfuse = "rulfuse.cli:main"
 

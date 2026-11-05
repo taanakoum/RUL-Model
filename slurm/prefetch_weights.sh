@@ -17,5 +17,9 @@ for repo in repos:
     path = snapshot_download(repo, allow_patterns=["*.json", "*.safetensors"])
     print("ok", repo, path)
 PY
+# B6 OmniFuser-RUL (D20): the ImageNet EfficientNet-B0 weights, into $TORCH_HOME (about 21 MB).
+if python -c "import torchvision" 2>/dev/null; then
+    python -c "from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights; efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1); print('ok efficientnet_b0')"
+fi
 du -sh "$HF_HOME"
 echo "Offline loading is tested on a compute node by job J0 (sbatch slurm/checks.sbatch)."

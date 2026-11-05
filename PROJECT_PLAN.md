@@ -67,6 +67,7 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D17 | Built to transfer | No PCA and no dataset-specific physics features inside the model. Frozen embeddings enter through a LayerNorm and a learned, shared low-rank projection. Channels are a set with descriptor embeddings. Only generic level descriptors complement the encoder (§6.2, §6.10) | You (2026-11-04): a versatile backbone |
 | D18 | Core and adapter | Everything dataset-specific lives in one **adapter** that turns a dataset into generic units, recordings and observations with a failure time per unit. The **core** (segments, targets, features, tokens, model, training, calibration, evaluation) never refers to passes, runs, blocks, named photo types or flank wear (§6.11) | You (2026-11-04) |
 | D19 | Seeds | **3 seeds everywhere:** gate decisions and the final model are 3-seed ensembles | You (2026-11-04) |
+| D20 | OmniFuser baseline | **B6, OmniFuser-RUL:** the OmniFuser architecture (frozen EfficientNet-B0 photos, C2F fusion, an RUL head) on this project's targets, processing, folds, weights, selection and metrics. A separate model: no RUL-Fuse decision reads it. Test reads follow D15. Plan: `docs/OMNIFUSER_RUL_PLAN.md` | You (2026-11-05) |
 
 ---
 
@@ -1127,6 +1128,7 @@ Every table shows these, in seconds.
 | B3 | Learned usage-only model: the chosen head on U features, no trajectory augmentation | Yes | A learned B2; v(∅) candidate (§11) |
 | B4 | Ridge on the level descriptors (absolute and relative; mean of the last 3 segments) + usage features → capped RUL | Yes | A generic condition-monitoring regression |
 | B5 | The image HI readout (here the tool photos' wear readout) + degradation extrapolation (F5 machinery, §6.5) | Yes | "Read the image and extrapolate" |
+| B6 | OmniFuser-RUL (D20): force + admitted photo types + usage through OmniFuser's encoders and C2F fusion; 3-seed ensemble, points only. B6-FT (force + tool photo) as a secondary row | Yes | What a published multimodal fusion architecture achieves on the same task and inputs |
 | R1 | Oracle: the *measured* HI, causally isotonic-smoothed, + the same extrapolation | No | Upper reference: what a perfect image reader would give |
 
 **Degradation extrapolation (B5, R1)** (generic, for any dataset with an HI).

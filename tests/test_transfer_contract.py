@@ -25,7 +25,7 @@ from rulfuse.features.cache import extract_image_features, extract_signal_featur
 from rulfuse.features.check import feature_check
 from rulfuse.features.encoders import PixelStatsEncoder, ProjectionEncoder
 
-GENERIC = ("core", "features", "models")  # rulfuse.models arrives in Stage 4
+GENERIC = ("core", "features", "models", "omnifuser_rul")  # rulfuse.models arrives in Stage 4
 GENERIC_FILES = ("audit.py", "baselines.py", "metrics.py")
 VOCABULARY = ("nonastreda", "flank", "tool_label", "image_label", "passmeta", "fz_rel", "ttf")
 

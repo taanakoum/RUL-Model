@@ -469,6 +469,56 @@ Rules that will hold for all of them: arrays with `%4` (at most 4 GPUs at once),
 fits that skip `DONE` ones, manifests committed with their study, and no test score read
 before the design freeze (D15).
 
+### 12.1 Baseline B6, OmniFuser-RUL (D20)
+
+A separate model: OmniFuser's architecture on this project's targets and inputs
+(`docs/OMNIFUSER_RUL_PLAN.md`). It needs the Stage-3 decision on which photo types are
+admitted, and nothing from Stages 4-9.
+
+**Install, once** (login node; after OmniFuser's tag `v1.1` is pushed):
+
+```bash
+cd "$WORKDIR/RUL-Model" && source slurm/env.sh
+python -m pip install --no-cache-dir "torchvision==<the version matching your torch>" \
+  --index-url https://download.pytorch.org/whl/cu126
+python -m pip install --no-cache-dir --no-deps \
+  "omnifuser-reproduction @ git+https://github.com/taanakoum/OmniFuser@v1.1"
+bash slurm/prefetch_weights.sh            # now also fetches EfficientNet-B0 into $TORCH_HOME
+python -c "import torchvision, omnifuser; print(torchvision.__version__, omnifuser.__version__)"
+```
+
+- `omnifuser.__version__` must print `1.1.0`.
+- torchvision must match torch: for torch 2.x, torchvision 0.(x + 15), for
+  example 2.5 → 0.20.
+- `--no-deps` keeps the environment's torch.
+
+**Pilot** (one fold, one seed; about 3 minutes plus the caches):
+
+```bash
+sbatch --job-name=b6-pilot --time=01:00:00 slurm/job.sbatch \
+  python -m rulfuse.cli omnifuser-arm --players force tool --folds 1 --seeds 0 --feature-device cuda
+```
+
+The log ends with `epoch N kept; S s`. S is the cost of one fit; the study is 330 fits.
+
+**The study** (one cache job plus 11 arm jobs; the players are `force` and the admitted
+photo types):
+
+```bash
+bash slurm/omnifuser_rul.sh force tool chip
+```
+
+**Validation results, any time** (CPU, reads the predictions):
+
+```bash
+srun --partition=cpu_short --time=00:20:00 bash -c \
+  'source slurm/env.sh && python -m rulfuse.cli omnifuser-analyse --players force tool chip'
+```
+
+- **Before the freeze:** it writes `runs/omnifuser_rul/<store>/analysis-validation.json`.
+- **From 2026-12-01:** add `--after-freeze` to score the test tools and get the Shapley
+  values and the two-versus-one tests. Before that date the flag is refused (D15).
+
 ---
 
 # Part C: Operating
