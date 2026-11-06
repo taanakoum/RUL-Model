@@ -4,7 +4,7 @@ The running record of what was built, how it was checked, what was decided and w
 plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 [PLAN_REVIEW.md](PLAN_REVIEW.md). Newest stage last; the status table is kept current.
 
-## Status at a glance (updated 2026-11-05)
+## Status at a glance (updated 2026-11-06)
 
 | Stage | State | Evidence |
 |---|---|---|
@@ -12,7 +12,7 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
 | S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
 | S3 Core/adapter refactor, features, feature check | **Code done** (2026-11-05); **Ruche jobs J0-J3 waiting for you** | Refactored store identical to Stage 2's; 111 tests (109 pass, 2 need the weights: they run in J0); ruff and pyright clean; [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) |
-| B6 OmniFuser-RUL (D20) | **Code done and reviewed** (2026-11-05); **ready for Ruche** once Stage 3's photo decision exists; results extraction ready | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) §14 (review R-1 to R-9); runbook §12.1-§12.2; 132 tests (130 pass; 2 need the weights) |
+| B6 OmniFuser-RUL (D20) | **Version 3 done and verified** (2026-11-06): 1 s steps scored on the 10 s points, GRU memory, temporal loss, 13 arms; **ready for Ruche** once Stage 3's photo decision exists | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) §14; runbook §12.1-§12.2; 151 tests (149 pass; 2 need the weights); real-data 1 s fit runs |
 | S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
@@ -645,4 +645,101 @@ to R-4 below). After the fixes, the Stage-3 and B6 jobs are ready to submit.
 - `slurm/checks.sbatch`, `slurm/omnifuser_rul.sh`, `slurm/omnifuser_results.sh`,
   `slurm/status.sh`;
 - `docs/RUCHE_RUNBOOK.md`, `docs/OMNIFUSER_RUL_PLAN.md`, `PROJECT_PLAN.md`,
+  `PROJECT_LOG.md`.
+
+
+---
+
+## B6 version 3: more training examples, a memory and a temporal loss (2026-11-06)
+
+Your request:
+
+- check whether B6 has enough training examples, and if not, shorten the segments,
+  with RUL and TTF labels that match and nothing broken, including OmniFuser's input
+  dimensions;
+- a GRU or LSTM memory, so each new segment uses the previous ones, in B6 and in the new
+  model;
+- a loss penalty when a predicted RUL is higher than the previous segment's;
+- test, validate, document and iterate until B6 is ready for Ruche.
+
+### Findings
+
+| Question | Answer |
+|---|---|
+| Training examples under version 2 | 2,823-3,343 prediction points per fold (median 2,956) at 10 s, all from 8 trajectories. Low for a deep fusion model |
+| With shorter segments | 5 s: 5,802; 2 s: 14,572; **1 s: 29,123** per fold (median). The 1 s store has 50,378 segments and 36,919 prediction points; its longest tool has 6,830 steps |
+| Do the labels need changes? | No. At 5, 2 and 1 s, every one of the 5,125 points of the 10 s store is found with identical τ and RUL (largest difference 0.0 s), and the failure times are equal. The TTF is the end of the TTF pass for every segment length, and RUL = τ* − τ follows from each segment's end |
+| OmniFuser's input dimensions | OmniFuser requires exactly 96 steps per window and takes any number of channels; B6 always builds (B, 96, 31) windows, so nothing changes with S. Its own loss optimizes only the force and class terms (C2F alignment and orthogonality are logged, not trained), so B6's head replacement stays faithful; RevIN is off |
+| Memory in the new model (RUL-Fuse) | Its model is Stage 4, not built yet. F1 attends to the full history by design; the plan now adds the shared GRU memory to F1 and to F0's signal expert (D21). The memory module is built and tested now |
+
+### What was built
+
+| Part | Where |
+|---|---|
+| Shared causal memory (GRU or LSTM over block means; step t reads only complete blocks) | `rulfuse/models/memory.py` (D21) |
+| Shared temporal losses: monotonic hinge relu(ŷ_later − ŷ_earlier), slope consistency below the cap | `rulfuse/models/losses.py` (D22) |
+| Temporal stability metrics: rising share, mean rise, \|Δŷ + Δτ\| | `rulfuse/metrics.py` |
+| Grid mask: which points of a fine store are the 10 s points | `rulfuse/core/store.py` |
+| Segment length as a setting of the adapter, the toy and the CLI (`--segment-s`; 10 s default, 1 s for B6) | `rulfuse/adapters/`, `rulfuse/cli.py` |
+| B6 version 3: 1 s store, pairs sampling, device-side batching, memory with dropout variants, temporal loss, grid selection and scoring, `on_grid` predictions, loss terms in `fit.json`, 13 arms (two ablations), stability columns, scoring only fits with matching settings, photo cache shared across segment lengths | `rulfuse/omnifuser_rul/` |
+| Study options passed through to every job (`-- --pairs-per-epoch 1024`) | `slurm/omnifuser_rul.sh`, `slurm/omnifuser_results.sh` |
+| Docs | B6 plan version 3 (O7-O11, §14); `PROJECT_PLAN.md` D20-D22, §6.4, §6.7, Gate 2b controls, job table; runbook §11.2, §12.1, §12.2 |
+
+### Better ideas adopted (documented in the B6 plan)
+
+1. **Score on the 10 s points.** B6 trains at 1 s but is scored and selected on the
+   project's 10 s points. A 1 s store contains them exactly, so the comparison with
+   RUL-Fuse and B0-B5 is unchanged.
+2. **A slope term with the hinge.** Below the cap the true RUL falls by exactly Δτ, so a
+   slope-consistency term is added to your hinge. RUL-Fuse's plan already had it. The two
+   models now share one temporal loss with the same weights (λ_mono 1.0, λ_cons 0.5).
+3. **Pairs with mixed lags.** Each pair is the previous segment half the time, and up to
+   200 s apart otherwise, so both immediate and longer-range rises are penalized.
+4. **A memory over blocks.** The memory runs over 10 s blocks of the 1 s steps, so its cost
+   stays linear (about 700 blocks per tool instead of 6,800 steps). The steps of the
+   unfinished block are inside OmniFuser's 96-step window.
+5. **A fixed pair budget.** Each epoch draws 2,048 pairs, so 10× more points do not cost
+   10× more time.
+6. **Ablations.** Two arms (without the memory; without the temporal terms) measure what
+   each change adds.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| Labels at 1 s (V-13) | As in the findings; real-data test: B2 on the 1 s store's grid = 467.8 s, as on the 10 s store |
+| Input dimensions (V-14) | Toy windows (B, 96, 17) at 10 s and 2 s; OmniFuser's parameter count identical; real data (B, 96, 31) |
+| Memory causality (V-15) | GRU and LSTM, blocks 1 and 4: later steps never change earlier states; only complete blocks are read; padding is never averaged. **Found and fixed:** a LayerNorm on the block means cancelled a rise shared by all inputs, which is the common rise of the force descriptors with wear. It was removed, and a test now checks that such a rise registers |
+| Switches reach the memory (V-16) | Force, photos and usage switched off change neither the window output nor the memory |
+| Temporal loss (V-17) | Hinge and slope by hand; on the toy, the fits with the terms rise less than the same fits without them (2 seeds) |
+| Scoring only matching fits (V-18) | **Found and fixed:** scores read every prediction file in an arm folder, whatever its settings, so a partly rerun arm would have mixed fits. Scores now use only fits whose `fit.json` matches |
+| Real data, laptop CPU (V-11) | `omnifuser-prepare` builds the 1 s store and descriptor cache in 38 s. A 2-epoch fit of force + tool + chip on fold 1 takes 38 s, trains on 30,103 points, has 296,181 trainable parameters, and predicts all 3,818 validation points of T2, flagging exactly its 393 grid points (116 in the window). B2 on that grid is 228.2 s, as on the 10 s store. The validation MAE after 2 short epochs was 445 s, a smoke value |
+| Job scripts | `bash -n` and LF on all; `omnifuser_rul.sh` dry-run with a fake `sbatch`: 14 submissions (the cache job and 13 arms), the study options on every job, the printed results command carrying them; the guards as before |
+| Suite | 151 tests: 149 pass, 2 skip (the Mantis and DINOv2 checkpoint tests, which run in J0); the B6 tests take about 3 minutes on the laptop CPU; ruff and pyright clean |
+
+### Cost and the pilot
+
+390 fits (13 arms × 10 folds × 3 seeds), expected 3-6 minutes each on an A100: about 20-40
+GPU-hours, against 16 for version 2. The pilot's time per fit decides, before the study and
+by cost only, whether the pair budget is halved (runbook §12.1).
+
+### Laptop files
+
+- The 1 s store (`nonastreda/6e0cb095967b`, 1.2 MB) and its descriptor cache (4 MB) were
+  built for the smoke run and kept under `D:\RULModel\interim`, so results copied home can
+  be scored on the laptop.
+- The photo features of the earlier smoke run were reused under the new key (same
+  encoder, specs and image table, asserted), and the copy under the old key was deleted.
+- No model weights were added.
+
+### Suggested commit (you commit)
+
+Your commit `f46453b` ("Memory Component for Model") already holds the memory, the losses,
+the grid mask, the segment-length setting and B6's data, model and training. What remains
+is one commit, "B6 version 3: matching-fit scoring, study options, docs":
+
+- `rulfuse/omnifuser_rul/{aggregate,report,study}.py`;
+- `slurm/omnifuser_rul.sh`, `slurm/omnifuser_results.sh`;
+- `tests/test_models.py`, `tests/test_omnifuser_rul.py`;
+- `docs/OMNIFUSER_RUL_PLAN.md`, `docs/RUCHE_RUNBOOK.md`, `PROJECT_PLAN.md`,
   `PROJECT_LOG.md`.

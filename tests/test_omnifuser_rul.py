@@ -38,7 +38,7 @@ from rulfuse.omnifuser_rul.train import (  # noqa: E402
 )
 
 KINDS = ["surface"]
-QUICK = {"pairs_per_epoch": 128}  # small epochs for CPU tests
+QUICK_PAIRS = 128  # small epochs for CPU tests
 
 
 def quiet(*_: object) -> None:
@@ -57,7 +57,9 @@ def _toy(root, segment_s=10.0):
     ds = toy.build(root / "images", n_units=5, segment_s=segment_s)
     store = SegmentStore.open(build_segment_store(ds, root / f"store-{segment_s:g}"))
     descriptors = data.descriptor_cache(store, ds.signals, log=quiet, root=root / "f")
-    features = data.image_feature_cache(store, encoder=FakePhotoEncoder(), log=quiet, root=root / "f")
+    features = data.image_feature_cache(
+        store, encoder=FakePhotoEncoder(), log=quiet, root=root / "f"
+    )
     steps = data.build_steps(store, descriptors, KINDS)
     return ds, store, descriptors, features, steps
 
@@ -85,7 +87,9 @@ def _inputs(steps, features, units, kinds_used=(0,)):
 
 def test_descriptors_are_the_feature_caches_descriptors(toy_b6, tmp_path):
     ds, store, descriptors, *_, root = toy_b6
-    signal = extract_signal_features(store, ds.signals, ProjectionEncoder(), root=tmp_path, log=quiet)
+    signal = extract_signal_features(
+        store, ds.signals, ProjectionEncoder(), root=tmp_path, log=quiet
+    )
     np.testing.assert_allclose(descriptors, np.asarray(signal.descriptors), rtol=1e-6)
     again = data.descriptor_cache(store, ds.signals, log=quiet, root=root / "f")
     assert again is not descriptors  # read back from the cache
@@ -237,10 +241,16 @@ def test_switched_off_inputs_cannot_change_the_output_or_the_memory(toy_b6):
         return out
 
     base = data.FitTensors(inputs, data.INPUT_STEPS, "cpu")
-    cases = {"force": dict(use_force=False), "photos": dict(use_photos=False), "usage": dict(use_usage=False)}
+    cases = {
+        "force": dict(use_force=False),
+        "photos": dict(use_photos=False),
+        "usage": dict(use_usage=False),
+    }
     for what, switch in cases.items():
         torch.manual_seed(0)
-        model = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec(), **switch).eval()
+        model = OmniFuserRUL(
+            layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec(), **switch
+        ).eval()
         with torch.no_grad():
             assert torch.allclose(run(model, base), run(model, changed(what)), atol=1e-5), what
     torch.manual_seed(0)
@@ -274,7 +284,9 @@ def test_modality_dropout_reads_the_matching_memory(toy_b6):
     with torch.no_grad():
         full = model.memory_states(*tensors.memory_inputs())
         no_force = model.memory_states(*tensors.memory_inputs(), variant=DROP_FORCE)
-        off = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec(), use_force=False)
+        off = OmniFuserRUL(
+            layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec(), use_force=False
+        )
         off.load_state_dict(model.state_dict())
         assert torch.allclose(no_force, off.eval().memory_states(*tensors.memory_inputs()))
         assert not torch.allclose(full, no_force)
@@ -292,8 +304,10 @@ def test_select_epoch_uses_three_consecutive_values():
 @pytest.fixture(scope="module")
 def toy_fits(toy_b6):
     _, store, _, features, steps, root = toy_b6
-    spec = ArmSpec(players=("force", "surface"), epochs=8, seeds=(0,), **QUICK)
-    folder = run_arm(store, steps, features, KINDS, spec, root / "runs", folds=[1], device="cpu", log=quiet)
+    spec = ArmSpec(players=("force", "surface"), epochs=8, seeds=(0,), pairs_per_epoch=QUICK_PAIRS)
+    folder = run_arm(
+        store, steps, features, KINDS, spec, root / "runs", folds=[1], device="cpu", log=quiet
+    )
     return spec, folder
 
 
@@ -308,7 +322,9 @@ def test_a_fit_learns_the_toy_rul_and_a_shuffled_control_does_not(toy_b6, toy_fi
     validation = steps[fold.validation]
     train_y = np.concatenate([steps[u].y_s[steps[u].point] for u in fold.train])
     v = validation.point
-    constant = float(np.average(np.abs(train_y.mean() - validation.y_s[v]), weights=validation.weight[v]))
+    constant = float(
+        np.average(np.abs(train_y.mean() - validation.y_s[v]), weights=validation.weight[v])
+    )
     assert _best(folder) < 0.7 * constant
     rng = np.random.default_rng(0)
     shuffled = dict(steps)
@@ -319,7 +335,17 @@ def test_a_fit_learns_the_toy_rul_and_a_shuffled_control_does_not(toy_b6, toy_fi
             np.concatenate([steps[t].y_s[steps[t].point] for t in fold.train])
         )[: int(s.point.sum())]
         shuffled[u] = replace(s, y_s=y)
-    control = run_arm(store, shuffled, features, KINDS, spec, tmp_path / "control", folds=[1], device="cpu", log=quiet)
+    control = run_arm(
+        store,
+        shuffled,
+        features,
+        KINDS,
+        spec,
+        tmp_path / "control",
+        folds=[1],
+        device="cpu",
+        log=quiet,
+    )
     assert _best(control) > 0.8 * constant
 
 
@@ -336,16 +362,30 @@ def test_predictions_cover_every_point_with_the_grid_flag_and_runs_resume(toy_b6
     prediction = np.asarray(table["prediction_s"])
     assert (prediction >= 0).all() and (prediction <= store.settings.horizon_s).all()
     record = json.loads((folder / "fold-01" / "seed-0" / "fit.json").read_text())
-    assert len(record["train_loss"]) == spec.epochs and {"mse", "hinge", "slope"} <= set(record["train_loss"][0])
+    assert len(record["train_loss"]) == spec.epochs and {"mse", "hinge", "slope"} <= set(
+        record["train_loss"][0]
+    )
     messages = []
-    run_arm(store, steps, features, KINDS, spec, root / "runs", folds=[1], device="cpu", log=messages.append)
+    run_arm(
+        store,
+        steps,
+        features,
+        KINDS,
+        spec,
+        root / "runs",
+        folds=[1],
+        device="cpu",
+        log=messages.append,
+    )
     assert any("done, skipped" in m for m in messages)
 
 
 def test_a_fine_fit_predicts_every_1s_point_and_selects_on_the_grid(toy_fine):
     _, store, _, features, steps, root = toy_fine
-    spec = ArmSpec(players=("force", "surface"), epochs=3, seeds=(0,), **QUICK)
-    folder = run_arm(store, steps, features, KINDS, spec, root / "runs", folds=[1], device="cpu", log=quiet)
+    spec = ArmSpec(players=("force", "surface"), epochs=3, seeds=(0,), pairs_per_epoch=QUICK_PAIRS)
+    folder = run_arm(
+        store, steps, features, KINDS, spec, root / "runs", folds=[1], device="cpu", log=quiet
+    )
     table = pq.read_table(folder / "fold-01" / "seed-0" / "predictions.parquet").to_pydict()
     fold = leave_one_unit_out(store.unit_names)[0]
     roles, grid = np.asarray(table["role"]), np.asarray(table["on_grid"])
@@ -360,10 +400,21 @@ def test_a_fine_fit_predicts_every_1s_point_and_selects_on_the_grid(toy_fine):
 
 def test_the_same_seed_gives_the_same_predictions(toy_b6, tmp_path):
     _, store, _, features, steps, _ = toy_b6
-    spec = ArmSpec(players=("force",), epochs=2, seeds=(3,), **QUICK)
-    a = run_arm(store, steps, features, KINDS, spec, tmp_path / "a", folds=[2], device="cpu", log=quiet)
-    b = run_arm(store, steps, features, KINDS, spec, tmp_path / "b", folds=[2], device="cpu", log=quiet)
-    read = lambda f: pq.read_table(f / "fold-02" / "seed-3" / "predictions.parquet").column("prediction_s").to_numpy()  # noqa: E731
+    spec = ArmSpec(players=("force",), epochs=2, seeds=(3,), pairs_per_epoch=QUICK_PAIRS)
+    a = run_arm(
+        store, steps, features, KINDS, spec, tmp_path / "a", folds=[2], device="cpu", log=quiet
+    )
+    b = run_arm(
+        store, steps, features, KINDS, spec, tmp_path / "b", folds=[2], device="cpu", log=quiet
+    )
+
+    def read(f):
+        return (
+            pq.read_table(f / "fold-02" / "seed-3" / "predictions.parquet")
+            .column("prediction_s")
+            .to_numpy()
+        )
+
     np.testing.assert_array_equal(read(a), read(b))
 
 
@@ -371,9 +422,11 @@ def test_the_temporal_terms_reduce_rising_predictions(toy_b6, tmp_path):
     """The monotonic hinge and the slope term, against the same fit without them (2 seeds)."""
     _, store, _, features, steps, _ = toy_b6
     rates = {}
-    for name, weights in (("on", {}), ("off", {"mono_weight": 0.0, "slope_weight": 0.0})):
-        spec = ArmSpec(players=("force", "surface"), epochs=5, seeds=(0, 1), **QUICK, **weights)
-        folder = run_arm(store, steps, features, KINDS, spec, tmp_path / name, folds=[1], device="cpu", log=quiet)
+    on = ArmSpec(players=("force", "surface"), epochs=5, seeds=(0, 1), pairs_per_epoch=QUICK_PAIRS)
+    for name, spec in (("on", on), ("off", replace(on, mono_weight=0.0, slope_weight=0.0))):
+        folder = run_arm(
+            store, steps, features, KINDS, spec, tmp_path / name, folds=[1], device="cpu", log=quiet
+        )
         unit = aggregate.score_arm(store, folder, "validation")["per_unit"]
         rates[name] = np.mean([u["mean_increase_s"] for u in unit.values()])
     assert rates["on"] < rates["off"]
@@ -389,7 +442,9 @@ def test_predict_unit_matches_the_training_memory(toy_b6):
     points = np.arange(inputs[1].n)
     # the memory of a unit does not depend on which other units share the tensors
     np.testing.assert_allclose(
-        predict_unit(model, tensors, 1, points, 16), predict_unit(model, one, 0, points, 16), atol=1e-5
+        predict_unit(model, tensors, 1, points, 16),
+        predict_unit(model, one, 0, points, 16),
+        atol=1e-5,
     )
 
 
@@ -446,7 +501,9 @@ def test_two_modalities_are_judged_on_a_preset_paired_test():
         full: {u: 338.0 + i for i, u in enumerate(units)},
     }
     validation = {s: float(np.mean(list(v.values()))) for s, v in window.items()}
-    report = aggregate.modality_report(window, validation, ["force", "tool", "chip"], {u: 470.0 for u in units})
+    report = aggregate.modality_report(
+        window, validation, ["force", "tool", "chip"], {u: 470.0 for u in units}
+    )
     assert report["best_single"] == ["tool"] and report["best_pair"] == ["force", "tool"]
     assert report["pair_vs_single"]["justified"]  # ≥ 10 s better on every unit
     assert not report["all_vs_pair"]["justified"]  # 2 s better: below the threshold
@@ -514,7 +571,9 @@ def test_photos_of_one_recording_become_visible_together():
     store = SegmentStore.open(build_segment_store(load_dataset("nonastreda")))
     images = store.images
     by_recording: dict[tuple[str, str], set[float]] = {}
-    for unit, key, available in zip(images["unit"], images["key"], images["available_s"], strict=True):
+    for unit, key, available in zip(
+        images["unit"], images["key"], images["available_s"], strict=True
+    ):
         by_recording.setdefault((str(unit), str(key)), set()).add(round(float(available), 6))
     assert by_recording and all(len(times) == 1 for times in by_recording.values())
 

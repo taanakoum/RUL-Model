@@ -72,14 +72,20 @@ def analyse(
     validation = {}
     for spec in arms:
         folder = arm_dir(root, store, spec)
-        if folder.is_dir():
-            validation[spec.name] = aggregate.score_arm(store, folder, "validation")
+        try:
+            validation[spec.name] = aggregate.score_arm(
+                store, folder, "validation", signature=spec.signature()
+            )
+        except FileNotFoundError:  # no fit with these settings yet
+            continue
     report: dict = {"validation": validation, "b2_validation": aggregate.b2_by_unit(store)}
     if not after_freeze:
         return report
     aggregate.check_seal("test", after_freeze, today)
     test = {
-        spec.name: aggregate.score_arm(store, arm_dir(root, store, spec), "test", True, today)
+        spec.name: aggregate.score_arm(
+            store, arm_dir(root, store, spec), "test", True, today, spec.signature()
+        )
         for spec in arms
     }
     report["test"] = test

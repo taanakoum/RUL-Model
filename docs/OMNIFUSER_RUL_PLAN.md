@@ -1,9 +1,16 @@
 # OmniFuser-RUL: an OmniFuser baseline for the RUL task
 
-Version 2, 2026-11-05. Version 1 (the same day) was a draft; §12 lists what
-the review of it found and how version 2 resolves each point. **Implemented the
-same day; §14 records the implementation, its verification and the three
-places where it refines this plan.**
+Version 3, 2026-11-06. Version 1 (2026-11-05) was a draft; §12 lists what its
+review found and how version 2 resolves each point; version 2 was implemented and
+reviewed the same day (§14). **Version 3** (your request of 2026-11-06) adds:
+
+- 1 s steps, OmniFuser's own (O7);
+- a GRU memory of the whole history (O8);
+- a penalty on rising RUL predictions, with a slope term (O9);
+- a fixed pair budget per epoch, with selection on the 10 s points (O10);
+- two ablation arms (O11).
+
+§14 records its implementation and verification.
 
 OmniFuser-RUL turns the finished OmniFuser reproduction
 ([github.com/taanakoum/OmniFuser](https://github.com/taanakoum/OmniFuser), tag
@@ -44,23 +51,30 @@ independent architecture:
 | O4 | Shared task settings | The targets, prediction points, folds, point weights, selection metric, seeds, ensembling and metrics are RUL-Fuse's (§3). Only the architecture is OmniFuser's | Review (§12, V2) |
 | O5 | B6's configuration, fixed now | Force + **every photo type admitted by the Stage-3 leakage probe** (the same inputs as RUL-Fuse) + usage. The secondary row B6-FT (force + tool photo) is OmniFuser's original pairing | Review (V7) |
 | O6 | Architecture values | OmniFuser `v1.0` defaults: d = 32, 4 RTD blocks, 4 GAT layers × 4 heads, k = 4, 2 C2F rounds; input of 96 steps; dropout 0.1; Adam, learning rate 1e-4, batch 32, 30 epochs. No search | Minimal change |
+| O7 | Time step | **1 s segments** (OmniFuser's own pooled step): B6 has its own store cut at S = 1 s. A fold trains on about 29,000 prediction points instead of about 3,000 at 10 s, and 96 steps are 96 s, about one pass. **Scored and selected on the 10 s grid** (D7): a 1 s store contains every 10 s point with the same τ, RUL and window, so B6, RUL-Fuse and B0-B5 are compared on the same 3,747 points | You (2026-11-06): more training examples; checked in §14 |
+| O8 | Memory | A **GRU over the tool's whole history** (`rulfuse.models.memory.CausalMemory`, shared with RUL-Fuse, D21). Its inputs are every step's force vector, a projection of the photo composite and a photo flag, averaged in 10-step blocks. Step t reads the state after the last complete block (causal); the head reads [last fused step ; memory state]. Hidden size 64 | You (2026-11-06): every new segment uses the information of all previous ones |
+| O9 | Temporal loss | Training samples are **pairs** of points of one tool, the earlier at lag 1 (the previous segment) half the time and up to 200 steps otherwise. The loss adds **1.0 × relu(ŷ_later − ŷ_earlier)** (a predicted RUL never rises) and **0.5 × ((ŷ_earlier − ŷ_later) − Δτ)²** where the earlier target is below the cap (true RUL falls by exactly Δτ), all on y/H (`rulfuse.models.losses`, D22) | You (2026-11-06), plus the slope term (a stronger statement of the same fact, already in RUL-Fuse's plan) |
+| O10 | Epochs | **2,048 pairs (4,096 windows) per epoch**, 30 epochs: a fixed training budget, close to version 2's, despite 10× more points | Cost (§10) |
+| O11 | Ablations | Two extra arms with all players: **without the memory** and **without the temporal terms** | Measures what O8 and O9 add |
 
 ## 2. Summary
 
 - **What changes.** OmniFuser's two outputs (force forecast, wear class) are
-  replaced by one RUL output from the same last fused step. The encoders, C2F
-  fusion and refinement stay as they are.
+  replaced by one RUL output from the same last fused step, joined by a GRU
+  memory of the whole history (O8). The encoders, C2F fusion and refinement stay
+  as they are. Steps are 1 s (O7); the loss penalizes rising predictions (O9).
 - **What it reads.** This project's segment store gives everything:
   - the gap-aware time axis (D12) and the confirmed TTF (D2);
-  - the causal trim, 10 s segments, and RUL capped at H = 1,500 s;
+  - the causal trim, 1 s segments (scored on the 10 s points), and RUL capped at
+    H = 1,500 s;
   - force-missing passes (D8), and photo availability times (D9).
 - **Model changes.**
   - In OmniFuser `v1.1`, about 25 lines:
     - an `encode()` method that returns the fused sequence (a refactor with
       identical outputs);
     - a photo-view count for the image projection.
-  - Here, a 60-line wrapper: an RUL head, and a switch that trains with one
-    stream zeroed.
+  - Here, a wrapper: an RUL head on [last fused step ; memory], the input
+    switches, and the shared memory and temporal-loss modules.
 - **The modality study.**
   - Players: force (F), tool photo (T), chip photo (C), and the workpiece
     photo (W) only if it passes the leakage probe. Usage is in every arm.
@@ -69,7 +83,8 @@ independent architecture:
     single-modality arm, over the 10 test tools, answers "is two justified?"
     (§8).
 - **Cost and dates.**
-  - About 15 GPU-hours on Ruche with cached features.
+  - About 20-40 GPU-hours on Ruche with cached features (13 arms; §10); the
+    pilot measures it.
   - Implementation and the validation-side runs by 2026-11-25; test reads
     after 2026-12-01, alongside RUL-Fuse's final runs.
 
@@ -113,16 +128,16 @@ longer measure what they add.
 
 | OmniFuser concept | OmniFuser-RUL | Why |
 |---|---|---|
-| Time step: 1 s of pooled force | **One 10 s segment** | Prediction points are segment ends (D7), so one step is one prediction point |
-| Input: 96 steps | **The 96 segments ending at the prediction point** (about 16 min, about 10 passes). Shorter histories at a tool's start are left-padded. | A causal history covering the recent wear trend; padding keeps every prediction point |
+| Time step: 1 s of pooled force | **One 1 s segment** (O7) | OmniFuser's own step; every segment end is a prediction point, so 10× the training samples of 10 s segments |
+| Input: 96 steps | **The 96 segments ending at the prediction point** (96 s, about one pass). Shorter histories at a tool's start are left-padded. **Plus the memory of everything before** (O8) | The window is OmniFuser's; the memory carries the wear trend over the tool's life |
 | Force per step: 3 pooled channels | **7 descriptors × 4 channels (Fx, Fy, Fz, \|F\|) = 28 values, plus a signal-present flag = 29** | This project's processing. The value MLP takes any width. Force-missing segments (D8) and padding are zeros with the flag 0. |
 | Run, block and position codes | **Off** (`metadata="none"`) | Run and block codes are the known shortcut. The position code uses the pass's total length, which is unknown during the pass (review R2 of the project plan). |
 | Usage | **log(1 + τ/H) and e/100 s**, appended to the force vector (31 values); switchable | Plan §3.3 allows them. Usage is in every arm of the study, as in RUL-Fuse. |
 | Photo per step | **Per view, the latest photo with `available_s` < the step's τ** | Enforces D9 with the store's own times; equals OmniFuser's lag 1 |
 | Several photo types | **One composite vector per pass: the views' frozen features side by side** (`image_views` = V; a missing or excluded view is zeros) | All photos of a pass share one availability time, so one index per step suffices (asserted, §9) |
 | Outputs | **One value, ŷ/H**, from the last fused step | D6. The force-forecast and class heads are not built. |
-| Loss | **Point-weighted MSE on y/H** (§3) | D10's mean objective, with the shared point weights |
-| Epoch selection | **Weighted whole-life validation MAE**, best mean of 3 consecutive epochs | Shared with RUL-Fuse (plan §4.3) |
+| Loss | **Point-weighted MSE on y/H** (§3) **+ monotonic hinge + slope consistency on pairs** (O9) | D10's mean objective, with the shared point weights; RUL can only fall |
+| Epoch selection | **Weighted whole-life validation MAE on the 10 s points**, best mean of 3 consecutive epochs | Shared with RUL-Fuse (plan §4.3): the same points and weights |
 | Prediction at evaluation | Clipped to [0, H] | The target's range |
 
 ## 5. Model changes (the minimal set)
@@ -144,7 +159,8 @@ longer measure what they add.
    - It builds `OmniFuser(config)` with `prediction_head="direct"`,
      `metadata="none"`, `force_channels=31`, `freeze_image_encoder=True` and
      `image_views=V`.
-   - It returns `Linear(d, 1)(encode(...)[:, -1])`, that is ŷ/H.
+   - It returns `Linear(d + 64, 1)([encode(...)[:, -1] ; m_t])`, that is ŷ/H, with
+     m_t the memory state (version 3; `Linear(d, 1)` without the memory).
    - The unused force and class heads of the direct head are deleted after
      construction, so they hold no parameters and get no gradient.
 4. **Input switches `use_force`, `use_photos`, `use_usage`** (changed in the
@@ -159,6 +175,17 @@ longer measure what they add.
      stays available when force or photos are off. Zeroing OmniFuser's whole
      sensor stream would also have removed usage, which travels in the force
      vector.
+   - The switches act on the memory's inputs in the same way. Modality dropout
+     draws one code per sample (force missing, no photo yet), and the sample
+     reads the memory computed with the same input missing.
+5. **Memory (version 3, O8).** `rulfuse.models.memory.CausalMemory`: a GRU, hidden
+   64, over 10-step block means of [force vector ; Linear(views × 1280 → 32) of the
+   photo composite ; photo flag]. It is causal by construction: step t reads the
+   state after the last block complete at t; before it, zeros. There is no
+   normalization of the block means, because a LayerNorm across features would
+   cancel a rise shared by all descriptors (found by a test, §14).
+6. **Temporal loss (version 3, O9).** `rulfuse.models.losses`: `monotonic_hinge`
+   and `slope_consistency` on each training pair.
 
 ## 6. Data module
 
@@ -175,27 +202,42 @@ longer measure what they add.
    ImageNet-normalized, and passed through the frozen EfficientNet-B0. Its
    pooled 1,280 features are cached once for the whole dataset: they do not
    depend on the fold.
-3. **Samples:** one per prediction point (3,747). Each is the 96 steps ending
-   at it, with y and the point weight at that point.
+3. **Samples:** pairs of prediction points of one tool (version 3); B6's store
+   has 36,919 points at 1 s, and about 29,000 train each fold. A point's window
+   is the 96 steps ending at it, with y and the point weight at that point.
+   The 10 s grid points are flagged (`core.store.grid_mask`). Selection and
+   scoring use them, with their own point weights, which equal the 10 s store's.
 4. **Normalization:** the descriptor and usage columns are standardized on
    the fold's 8 training tools; the flags stay 0/1. Photo features enter raw,
    as in OmniFuser; the projection learns their scale.
-5. **Batches:** windows, a per-window list of distinct composite photo
-   vectors, and per-step indices. This is exactly OmniFuser's
-   `(images, image_indices)` interface with precomputed features.
+5. **Batches** (`FitTensors`, version 3): every unit's force vectors and
+   per-step photo rows are held on the device, padded. Windows are read by tensor
+   indexing; each sample passes its tool's table of photo composites (about 50
+   rows) and per-step rows into it. This is OmniFuser's `(images, image_indices)`
+   interface with precomputed features, without building samples one at a time.
+6. **Photo-feature cache key** (version 3): the image table and the specs, not
+   the store's signature, so stores cut at 1 s and 10 s share one EfficientNet
+   pass.
 
 ## 7. Training, selection and evaluation
 
 **One fit** (fold *i*, seed *s*):
 
-1. Build the samples of the 8 training tools and of the validation tool.
-2. Train for 30 epochs with the point-weighted MSE. Use Adam with learning
-   rate 1e-4 and batch 32, and clip gradients at 1.0 (OmniFuser's settings).
+1. Standardize on the 8 training tools; put every tool's inputs on the device.
+2. Train for 30 epochs of 2,048 pairs (O10). Per batch of 16 pairs (32 windows):
+   - run the memory over the training tools' whole histories;
+   - encode the windows;
+   - minimize the point-weighted MSE + 1.0 × hinge + 0.5 × slope term (O9).
+
+   Use Adam with learning rate 1e-4, and clip gradients at 1.0 (OmniFuser's
+   settings).
 3. After each epoch, compute the weighted whole-life MAE on the validation
-   tool. Keep the epoch with the best mean of 3 consecutive values.
-4. Predict every pre-failure point of the validation and test tools. Write
-   one row per point (`unit`, `segment row`, `fold`, `seed`, `ŷ`) to
-   `runs/omnifuser_rul/<arm>/fold-<i>/seed-<s>/predictions.parquet`.
+   tool's 10 s points. Keep the epoch with the best mean of 3 consecutive
+   values.
+4. Predict every pre-failure point (1 s) of the validation and test tools.
+   Write one row per point (`unit`, `segment row`, `fold`, `seed`, `on_grid`,
+   `ŷ`) to `runs/omnifuser_rul/<store>/<arm>/fold-<i>/seed-<s>/predictions.parquet`,
+   and the per-epoch validation MAE and loss terms to `fit.json`.
 
 **Aggregation** (`rulfuse.omnifuser_rul.aggregate`):
 
@@ -206,7 +248,9 @@ longer measure what they add.
 **Reported** (the same tables as RUL-Fuse):
 
 - the plan §10.2 groups **point, safety, prognostic and stability**, on the
-  window (headline), whole-life and recording-end points;
+  window (headline), whole-life and recording-end points of the 10 s grid;
+- the temporal stability over every 1 s point: the share of steps where ŷ rises,
+  the mean rise, and |Δŷ + Δτ| (`metrics.temporal_stability`);
 - force-missing points and the points after T4's and T2's gaps, separately;
 - the mean ± sd over the 10 test tools of each tool's 3-seed ensemble metric,
   and the pooled value;
@@ -236,9 +280,17 @@ B6 gives points, not intervals, so its uncertainty and decision rows show "–".
 | F, usage off (`force-nousage`) | `force` | `--no-usage` |
 | T, usage off (`tool-nousage`) | `tool` | `--no-usage` |
 | F+T+C with modality dropout (`force+tool+chip-dropout0.2`) | `force tool chip` | `--modality-dropout 0.2`: per sample, with p/2 the force is missing and with p/2 no photo is visible yet |
+| F+T+C without the memory (`force+tool+chip-nomemory`) | `force tool chip` | `--no-memory` (O11) |
+| F+T+C without the temporal terms (`force+tool+chip-notemporal`) | `force tool chip` | `--mono-weight 0 --slope-weight 0` (O11) |
 
-`rulfuse omnifuser-study --players force tool chip --list` prints the 11 arms
-with their options.
+`rulfuse omnifuser-study --players force tool chip --list` prints the 13 arms
+with their options. Shapley values and the paired tests use only the arms with
+usage on, no dropout and the default memory and loss.
+
+**Q5. Do the memory and the temporal terms help?** F+T+C against its two ablations,
+on validation (any time) and on test (after the freeze): the window MAE, and the
+stability (rising steps, |Δŷ + Δτ|). This is reported, not used to change B6
+before the freeze.
 
 **Q1. Which modality contributes most?**
 
@@ -305,6 +357,12 @@ way, the ranking is a property of the data, not of one model.
 | V-9 | Test seal | `aggregate` refuses test scores before the freeze without `--after-freeze` |
 | V-10 | Transfer contract | The core imports nothing from `omnifuser_rul`; photo kinds come from the store, never hard-coded (plan P22) |
 | V-11 | Real-data smoke | One fold, 2 epochs, laptop CPU, cached features: runs, writes predictions, scores validation |
+| V-13 | Labels at 1 s (O7) | A 1 s store contains every 10 s point with the same τ, RUL and window; failure times are unchanged; B2 on the grid points of the 1 s store equals B2 on the 10 s store |
+| V-14 | Input dimensions (O7) | Windows are (B, 96, 31) force vectors and (B, 96) photo rows whatever S; OmniFuser's parameter count is the same at 10 s and finer steps |
+| V-15 | Memory causality (O8) | The memory state at step t is unchanged when any step after t changes; only complete blocks are read; padding is never averaged; a rise shared by all inputs registers |
+| V-16 | Switches reach the memory (O8) | With force, photos or usage off, changing that input changes neither the window output nor the memory |
+| V-17 | Temporal loss (O9) | The hinge is zero for non-increasing pairs and pushes a rising pair apart in the right direction; the slope term is zero when the decrease equals Δτ; on the toy, the same fits without the terms rise more |
+| V-18 | Scoring only the right fits | Scores use only fits whose `fit.json` records the arm's settings (a partly rerun arm never mixes) |
 
 ## 10. Stages, timeline and cost
 
@@ -319,11 +377,16 @@ way, the ranking is a property of the data, not of one model.
 
 **Cost.**
 
-- One fit trains on about 3,000 samples for 30 epochs: about 3 minutes on an
-  A100 with cached features. The pilot measures it.
-- 11 arms × 10 folds × 3 seeds = 330 fits, about 16 GPU-hours. The 30 fits of
-  an arm form one job, so the study is 11 jobs.
-- It fits the 4-GPU limit in about half a day of wall time.
+- One fit (version 3) trains on 30 × 4,096 windows, plus the memory over
+  the 8 training tools for each of its 3,840 batches. Expected 3-6 minutes on an
+  A100 with cached features; the pilot measures it.
+- 13 arms × 10 folds × 3 seeds = 390 fits, about 20-40 GPU-hours. The 30 fits of
+  an arm form one job, so the study is 13 jobs of at most 8 hours each.
+- If the pilot's fit takes more than 6 minutes, halve `--pairs-per-epoch` (1,024)
+  for the whole study before it starts. That is a cost decision, made before any
+  result. If it takes more than 15 minutes, also split each arm's folds over two
+  jobs (`--folds 1 2 3 4 5` and `--folds 6 7 8 9 10`).
+- It fits the 4-GPU limit in about a day of wall time.
 - It is scheduled around RUL-Fuse's Stage-4/5 jobs.
 - The EfficientNet-B0 weights must be prefetched for the offline jobs
   (`slurm/prefetch_weights.sh`).
@@ -338,7 +401,10 @@ way, the ranking is a property of the data, not of one model.
 | 10 tools give low power for Q2 | The interval of the difference and per-tool wins; "underpowered" is a possible, stated outcome |
 | T4 has 20 window points | Whole-life selection; per-tool and pooled reporting |
 | The workpiece leaks the stage | Admitted only if it passes the Stage-3 probe; decision recorded when the J3 report arrives |
-| GPU time competes with RUL-Fuse | 16 GPU-hours in 11 jobs, run in gaps; the arms are independent and resumable |
+| GPU time competes with RUL-Fuse | 20-40 GPU-hours in 13 jobs, run in gaps; the arms are independent and resumable; the pair budget can be halved after the pilot |
+| 1 s descriptors are noisier than 10 s ones | Each is still 1,000 samples (about 66 spindle turns); the memory averages 10 s blocks; the 10 s grid scores the same points as before |
+| The memory's backpropagation through about 500 blocks per tool is slow or unstable | Blocks of 10 steps; gradient clipping at 1; the no-memory ablation bounds the effect |
+| The temporal terms over-smooth (a model that always predicts slowly falling values) | The MSE term dominates on the targets; the no-temporal ablation measures the effect |
 
 ## 12. Review of version 1
 
@@ -382,6 +448,9 @@ rulfuse/omnifuser_rul/
   study.py       arm definitions (§8) and the analysis
   aggregate.py   scores, ensembles, Shapley, two-versus-one tests, test seal
   report.py      results: progress, scores, choices fixed on validation, RESULTS.md
+rulfuse/models/  (shared with RUL-Fuse)
+  memory.py      CausalMemory: GRU/LSTM over block means, causal (D21, O8)
+  losses.py      monotonic_hinge, slope_consistency (D22, O9)
 rulfuse/cli.py   omnifuser-prepare | omnifuser-arm | omnifuser-study | omnifuser-analyse |
                  omnifuser-results
 tests/test_omnifuser_rul.py
@@ -465,4 +534,58 @@ Findings and fixes:
 3. When every arm is complete, and before 2026-12-01: the results job (runbook §12.2),
    which records the comparisons in `choices.json`; copy the archive home (§13).
 4. From 2026-12-01: the same job with `--after-freeze` for the test read.
+
+### Version 3 (2026-11-06)
+
+**Training examples.** Under version 2 (10 s steps) a fold trained on 2,823-3,343
+prediction points (median 2,956), all from 8 trajectories. With finer segments:
+
+| Segment length | Segments | Prediction points | Window points | Training points per fold (median) | Longest tool (steps) |
+|---|---|---|---|---|---|
+| 10 s (version 2, RUL-Fuse) | 5,125 | 3,747 | 1,361 | 2,956 | 670 |
+| 5 s | 10,014 | 7,350 | 2,647 | 5,802 | 1,364 |
+| 2 s | 25,181 | 18,467 | 6,673 | 14,572 | 3,414 |
+| **1 s (version 3)** | 50,378 | 36,919 | 13,310 | 29,123 | 6,830 |
+
+At every length, all 5,125 points of the 10 s store are found with identical τ and RUL
+(largest difference 0.0 s), and the failure times are equal. The RUL and failure-time
+labels therefore need no change: the failure time is the end of the TTF pass for every S,
+and RUL = τ* − τ follows from each segment's end. 1 s was chosen as OmniFuser's own step;
+the samples are strongly correlated (the information is still 8 failure trajectories), so
+the gain is more distinct windows for a deep model, not more independent tools.
+
+**OmniFuser's input dimensions.** OmniFuser requires exactly `input_len` = 96 steps per
+window and any number of force channels; B6 always builds 96-step windows of 31 values, so
+nothing in OmniFuser changes with S (V-14). OmniFuser's own loss uses only the force and
+class terms (its C2F alignment and orthogonality terms are logged, not optimized), so B6's
+head-only replacement remains faithful; RevIN is off by default and stays off (it would
+remove the absolute force level).
+
+**Implemented:** `rulfuse/models/{memory,losses}.py`; `core.store.grid_mask`;
+the adapter's and the toy's `segment_s`; B6's data (`UnitInputs`, `FitTensors`,
+`sample_pairs`, the segment-independent photo key), model (memory, dropout variants),
+training (pairs, temporal loss, grid selection, `on_grid`, loss terms in `fit.json`),
+aggregation (grid scoring, stability metrics, B2 on the grid, only matching fits),
+study (13 arms), report (stability columns) and CLI (`--segment-s`, `--eval-grid-s`,
+`--no-memory`, `--memory-hidden`, `--memory-block`, `--mono-weight`, `--slope-weight`,
+`--max-lag`, `--pairs-per-epoch`).
+
+**Verification:**
+
+| # | Result |
+|---|---|
+| V-13 | The table above; real-data test: B6's 1 s store has 36,919 points, its grid is exactly the 5,125 segments of the 10 s store, and B2 on it equals 467.8 s |
+| V-14 | Toy windows (B, 96, 17) at 10 s and at 2 s; OmniFuser's parameter count identical; real data: (B, 96, 31), 296,181 trainable parameters with the memory |
+| V-15 | GRU and LSTM, blocks 1 and 4: changing any later step leaves earlier states unchanged; zero state before the first complete block. **Found and fixed:** a LayerNorm on the block means cancelled a rise shared by all inputs (the common rise of the force descriptors with wear); removed |
+| V-16 | Force, photos and usage switched off: neither the output nor the memory changes when that input changes |
+| V-17 | Hinge and slope terms by hand; on the toy (2 seeds), the fits with the terms have a lower mean rise than the same fits without them |
+| V-18 | A smoke fit with other settings is not scored for the default arm (and is, 1 of 10, with its own settings) |
+| V-11 (version 3) | Real data, laptop CPU: `omnifuser-prepare` builds the 1 s store (36,919 points) and its descriptor cache in 38 s; a 2-epoch fit of force + tool + chip on fold 1 (256 pairs per epoch) takes 38 s, trains on 30,103 points, predicts all 3,818 validation points of T2 and flags exactly its 393 grid points (116 in the window); B2 on that grid is 228.2 s, as on the 10 s store; the stability metrics are reported (rising steps 0.46 after 2 epochs, a smoke value) |
+
+The project's suite: 151 tests, 149 pass, 2 skip (the Mantis and DINOv2 checkpoint tests,
+which run in Ruche job J0); the B6 tests take about 3 minutes on the laptop CPU; ruff and
+pyright report no issues.
+
+**What remains:** the same four steps as above. The pilot (runbook §12.1) now also
+decides the pair budget (§10).
 

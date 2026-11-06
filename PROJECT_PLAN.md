@@ -67,7 +67,9 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D17 | Built to transfer | No PCA and no dataset-specific physics features inside the model. Frozen embeddings enter through a LayerNorm and a learned, shared low-rank projection. Channels are a set with descriptor embeddings. Only generic level descriptors complement the encoder (§6.2, §6.10) | You (2026-11-04): a versatile backbone |
 | D18 | Core and adapter | Everything dataset-specific lives in one **adapter** that turns a dataset into generic units, recordings and observations with a failure time per unit. The **core** (segments, targets, features, tokens, model, training, calibration, evaluation) never refers to passes, runs, blocks, named photo types or flank wear (§6.11) | You (2026-11-04) |
 | D19 | Seeds | **3 seeds everywhere:** gate decisions and the final model are 3-seed ensembles | You (2026-11-04) |
-| D20 | OmniFuser baseline | **B6, OmniFuser-RUL:** the OmniFuser architecture (frozen EfficientNet-B0 photos, C2F fusion, an RUL head) on this project's targets, processing, folds, weights, selection and metrics. A separate model: no RUL-Fuse decision reads it. Test reads follow D15. Plan: `docs/OMNIFUSER_RUL_PLAN.md` | You (2026-11-05) |
+| D20 | OmniFuser baseline | **B6, OmniFuser-RUL:** the OmniFuser architecture (frozen EfficientNet-B0 photos, C2F fusion, an RUL head) on this project's targets, processing, folds, weights, selection and metrics. A separate model: no RUL-Fuse decision reads it. Test reads follow D15. Plan: `docs/OMNIFUSER_RUL_PLAN.md` Version 3 (2026-11-06): 1 s steps scored on the 10 s points, a GRU memory and the temporal loss (D21, D22) | You (2026-11-05, 2026-11-06) |
+| D21 | Memory | **A causal recurrent memory of each unit's whole history** (`rulfuse.models.memory.CausalMemory`, a GRU over block means of the step inputs; step t reads only complete blocks). B6 uses it now. In RUL-Fuse, F1 and F0's signal expert concatenate its state (over the force tokens, block 1) with their output at every force token before the head; Gate 2b reports a no-memory control (§7.5). F1's attention already reaches the whole history; the memory adds a running summary that is cheap at any length | You (2026-11-06): each new segment uses the information of all previous ones |
+| D22 | Rising predictions | **Penalized in the loss of both models** (`rulfuse.models.losses`): λ_mono · relu(μ_later − μ_earlier) on pairs of points of one unit (RUL can only fall), with the slope-consistency term where the target is below the cap; λ_mono = 1.0 and λ_cons = 0.5 on y/H in both models (§6.7) | You (2026-11-06) |
 
 ---
 
@@ -732,6 +734,19 @@ $$
   experts' σ and the usage features.
 - Absent modalities simply drop out of the sum.
 
+**Memory (D21).** Both candidates read a recurrent summary of the unit's whole
+history, the shared `CausalMemory` (a GRU, hidden 64) over the force tokens:
+
+- F1 concatenates its state with the transformer output at each force token
+  before the heads;
+- F0 adds it to the signal expert;
+- the image expert is a GRU already.
+
+The memory is causal (it reads only steps up to the token), and its cost grows
+linearly with the history. That matters if the segment-length arm (§12) or a
+larger dataset makes the token history long. Gate 2b runs the winner without the
+memory as a reported control.
+
 **Together** the two finalists bracket the design space: F1 has full
 interaction, F0 has none beyond the weighting. Gate 2 compares them, each at
 its best of three learning rates (Rule B), then tests the options on the
@@ -769,6 +784,7 @@ $$
 \mathcal L = \underbrace{\textstyle\sum_i w_i(\mu_i-y_i)^2/H^2}_{\text{MSE (primary)}}
 + \lambda_{\text{nll}}\,\textstyle\sum_i w_i\,\mathrm{NLL}_t\!\big(y_i \mid \mathrm{sg}(\mu_i),\sigma_i,\nu_i\big)
 + \lambda_{\text{cons}}\!\!\sum_{(i,j)}\!\frac{\big(\mu_i-\mu_j-(\tau_j-\tau_i)\big)^2}{H^2}\,\mathbb 1[y_i<H]
++ \lambda_{\text{mono}}\!\!\sum_{(i,j)}\!\frac{\mathrm{relu}(\mu_j-\mu_i)}{H}
 + \lambda_{\text{hi}}\,\mathrm{Huber}\big(\widehat{\mathrm{HI}}-\mathrm{HI}\big)/s_{\mathrm{HI}}
 $$
 
@@ -779,8 +795,15 @@ $$
 - **Consistency term.** True RUL falls by exactly the operating time between
   two points of the same unit (pairs at most 0.13·H = 200 s apart). For F0 it
   applies to the fused output.
-- **Defaults:** λ_nll = 0.5, λ_hi = 0.3 (0 without an HI), λ_cons = 0.1. MSE
-  and MAE are always both reported (§10).
+- **Monotonic hinge (D22).** For the same pairs (i earlier than j), and for every
+  pair of consecutive force tokens, a predicted RUL that rises is penalized:
+  relu(μ_j − μ_i). It holds in the capped region too, where the consistency
+  term does not apply. The functions are shared with B6
+  (`rulfuse.models.losses`).
+- **Defaults:** λ_nll = 0.5, λ_hi = 0.3 (0 without an HI), λ_cons = 0.5,
+  λ_mono = 1.0 (D22; λ_cons was 0.1 before 2026-11-06, raised to B6's value so
+  both models share one temporal loss). MSE and MAE are always both reported
+  (§10).
 
 ### 6.8 Regularization and augmentation (8 trajectories per fold)
 
@@ -1019,6 +1042,7 @@ Cost: about 0.05-0.3 s per step on a CPU, so a fit takes 1-3 min; the pilot
 | Gate 2a | Learning rate {3e-4, 1e-3, 3e-3} for each of F1 and F0 (Rule B within a family); then F1 against F0 at their best (Rule B) | 2 × 3 × 10 folds × 3 seeds = 180 |
 | Gate 2b | Options on the winner, no trajectory augmentation and no phase A (each by Rule A); token mode relative only or absolute only against the default both (peers, Rule B) | 4 × 30 = 120 |
 | Gate 2b control | Last recording only (reported, not a decision: your specification is the full history) | 30 |
+| Gate 2b control | Without the memory (D21) and without the monotonic hinge (D22), each reported, not a decision: both are your specification | 2 × 30 = 60 |
 | Sweep | One factor at a time on the winner, each by Rule A: d {32, 96}; dropout {0.1, 0.3}; projection rank {8, 32}; ρ_max {0.1, 0.3}; w_far {0.1, 1.0} | 10 × 30 = 300 |
 
 There is no per-fold tuning: one validation tool per fold is too noisy to
@@ -1405,6 +1429,8 @@ RUL Model/
                             time embeddings, causal baseline, relative-time bias
       fusion.py             F1 token fusion, F0 experts (usage, signals, images) + gPoE
       heads.py              Student-t RUL (s), quantile, HI nowcast
+      memory.py             CausalMemory: GRU/LSTM over block means, causal (D21; built 2026-11-06)
+      losses.py             monotonic hinge, slope consistency (D22; built 2026-11-06)
     degradation.py          HI extrapolation used by B5 and R1
     augment.py              trajectory augmentation, modality, channel and token dropout
     losses.py
@@ -1595,7 +1621,7 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J3 | 3 | Feature check (`cpu_short`): go/no-go, readouts, leakage probe | 1 | – | 2-10 min |
 | J1 | 4 | Pilot: one fold, F1 on the cached features | 1 | 3 | 30 min |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds | 60 | 180 | 4-5 GPU-h |
-| J6 | 5 | Gate 2b: 4 options + 1 control × 10 folds | 50 | 150 | 4 GPU-h |
+| J6 | 5 | Gate 2b: 4 options + 3 controls (last recording; no memory; no hinge) × 10 folds | 70 | 210 | 5-6 GPU-h |
 | J7 | 5 | Sweep: 10 variants × 10 folds | 100 | 300 | 7-8 GPU-h |
 | J8 | 6 | Gate 3: 2 heads × 10 folds, each with 4 inner fits per seed | 20 | 300 | 7-8 GPU-h |
 | J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each | 10 | 150 | 3.5 GPU-h |
@@ -1603,10 +1629,10 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J12 | 8 | Sensitivity tier 1 (5 refit arms) / tier 2 (up to 9 arms + features) | 50 / 90 | 150 / 270 | 4 / 8 GPU-h |
 | J13 | 9 | Report | 1 | – | 15 min |
 | B6-P | 3 (after J3) | B6 OmniFuser-RUL pilot and caches (`b6-pilot`, `b6-prepare`) | 2 | 1 | 30 min |
-| B6-S | 5-6 | B6 study: 11 arms × 10 folds × 3 seeds (`slurm/omnifuser_rul.sh`; docs/OMNIFUSER_RUL_PLAN.md §8) | 11 | 330 | about 16 GPU-h |
+| B6-S | 5-6 | B6 study (version 3): 13 arms × 10 folds × 3 seeds (`slurm/omnifuser_rul.sh`; docs/OMNIFUSER_RUL_PLAN.md §8) | 13 | 390 | about 20-40 GPU-h |
 | B6-R | 6, and after 2026-12-01 | B6 results (`slurm/omnifuser_results.sh`; validation, then the sealed test read) | 1-2 | – | 5 min each |
 
-The total is about 40-50 A100-hours for RUL-Fuse (the Stage-3 feature job adds under one), plus about 16 for baseline B6. Submit arrays in the evening; run
+The total is about 40-50 A100-hours for RUL-Fuse (the Stage-3 feature job adds under one), plus about 20-40 for baseline B6 (its pilot measures it; the pair budget can be halved). Submit arrays in the evening; run
 `status.sh` each morning.
 
 ### 16.5 Safe practice
@@ -1921,9 +1947,10 @@ Each has a default that the plan assumes until you answer.
 | Projection | LayerNorm + shared low-rank projection (rank 16) per modality; no PCA | §6.3, §6.10 |
 | Tool baseline and token mode | First B = 4 recordings, causal running mean; token mode "both" (absolute + relative halves); readouts absolute | §5.9 |
 | Fusion | F1 or F0 (Gate 2a) | §6.4 |
+| Memory | GRU, hidden 64, over the force tokens (B6: 10-step blocks of 1 s steps) | D21 |
 | F1 backbone | Causal transformer: 2 layers, d = 64, 4 heads, FFN 128, dropout 0.2, relative-time bias | §6.4 |
 | Head | Student-t RUL in seconds: μ = H·sigmoid; σ floor 0.005·H; ν = 3 + softplus | §6.6 |
-| Loss weights | MSE 1; NLL 0.5 (mean detached); consistency 0.1; HI 0.3 | §6.7 |
+| Loss weights | MSE 1; NLL 0.5 (mean detached); consistency 0.5; monotonic hinge 1.0; HI 0.3 | §6.7, D22 |
 | Point weights | Equal total per tool; w_far = 0.3 | §7.3 |
 | Optimizer | AdamW, lr 1e-3 (Gate 2a), weight decay 0.05, gradient clip 1.0 | §7.3 |
 | Schedule | Phase A 1-100 (warm-up 20); phase B 101-500, cosine; NLL ramp 101-150; EMA 0.99 restarted at 101; patience 10 evaluations | §7.4 |

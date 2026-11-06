@@ -2,7 +2,8 @@
 # Body of the B6 results job (docs/RUCHE_RUNBOOK.md §12.2). Run it on a CPU node:
 #   sbatch --job-name=b6-results slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip
 #   sbatch --job-name=b6-results slurm/cpu.sbatch bash slurm/omnifuser_results.sh --after-freeze force tool chip
-# The players are "force" and the admitted photo types, as given to slurm/omnifuser_rul.sh.
+# The players are "force" and the admitted photo types, as given to slurm/omnifuser_rul.sh;
+# options after "--" must be the ones the study was submitted with (they select its fits).
 # It writes runs/omnifuser_rul/<store>/results/ (RESULTS.md, progress, scores, choices,
 # curves) and packs everything a later analysis needs into one archive in $WORKDIR: every
 # fit's predictions and fit.json, the results folder and the B6 job logs. Test scores are
@@ -13,9 +14,11 @@ cd "$(dirname "$0")/.."
 
 flags=()
 players=()
-for arg in "$@"; do
-    if [ "$arg" = "--after-freeze" ]; then flags+=("$arg"); else players+=("$arg"); fi
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    if [ "$1" = "--after-freeze" ]; then flags+=("$1"); else players+=("$1"); fi
+    shift
 done
+if [ "$#" -gt 0 ]; then shift; flags+=("$@"); fi
 if [ "${#players[@]}" -eq 0 ]; then
     echo "usage: bash slurm/omnifuser_results.sh [--after-freeze] force IMAGE_TYPE ..." >&2
     exit 2

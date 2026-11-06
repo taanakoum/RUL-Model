@@ -152,11 +152,11 @@ def _fmt(value, digits: int = 1) -> str:
 def _score_table(scores: dict, progress: dict[str, dict], b2: dict[str, float]) -> list[str]:
     lines = [
         "| Arm | Fits | Window MAE (s), mean ± sd over units | Pooled | Whole-life MAE (s) | "
-        "Better than B2 (units) | Mean gain over B2 (s) |",
-        "|---|---|---|---|---|---|---|",
+        "Better than B2 (units) | Mean gain over B2 (s) | Rising steps | Mean rise (s) |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     b2_mean = float(np.mean(list(b2.values())))
-    lines.append(f"| B2 (usage rule) | – | {_fmt(b2_mean)} | – | – | – | – |")
+    lines.append(f"| B2 (usage rule) | – | {_fmt(b2_mean)} | – | – | – | – | 0 | 0 |")
     for arm, result in scores.items():
         s = result["summary"]
         per_unit = {u: v["window_mae"] for u, v in result["per_unit"].items() if "window_mae" in v}
@@ -167,7 +167,9 @@ def _score_table(scores: dict, progress: dict[str, dict], b2: dict[str, float]) 
             f"| {arm} | {fits} | {_fmt(s['window_mae']['mean'])} ± {_fmt(s['window_mae']['sd'])} "
             f"| {_fmt(s['window_mae']['pooled'])} | {_fmt(s['whole_life_mae']['mean'])} "
             f"| {sum(g > 0 for g in gains)}/{len(gains)} "
-            f"| {_fmt(float(np.mean(gains)) if gains else None)} |"
+            f"| {_fmt(float(np.mean(gains)) if gains else None)} "
+            f"| {_fmt(s.get('increase_rate', {}).get('mean'), 3)} "
+            f"| {_fmt(s.get('mean_increase_s', {}).get('mean'), 2)} |"
         )
     return lines
 
@@ -207,7 +209,10 @@ def _markdown(results: dict) -> str:
         "",
         "## Validation units (any time)",
         "",
-        "Each fold's validation unit, scored with the 3-seed ensemble; window = RUL ≤ H.",
+        "Each fold's validation unit, scored with the 3-seed ensemble on the evaluation grid's",
+        "points (the project's 10 s points); window = RUL ≤ H. Rising steps: the share of",
+        "consecutive prediction points (every point, 1 s apart for B6) where the predicted RUL",
+        "rises; mean rise: its average positive change. B2 never rises.",
         "",
         *_score_table(results["validation"], {a["arm"]: a for a in p}, results["b2_validation"]),
         "",

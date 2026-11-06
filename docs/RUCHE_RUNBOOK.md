@@ -24,7 +24,7 @@ Every block marked `bash` is typed **on Ruche** (in the SSH session). Every bloc
 | Downloading model weights | **Ruche login node** (`slurm/prefetch_weights.sh`) | Compute nodes have no internet; the laptop keeps no weights |
 | Stores, encoder features, feature check (Stage 3) | Ruche jobs J0-J3 | Your instruction: encoders run on Ruche |
 | Training studies (Stages 4-8) | Ruche job arrays (J1, J5-J13) | Plan §16.4 |
-| Baseline B6, OmniFuser-RUL: caches, 11 study arms, results | Ruche jobs `b6-prepare`, `b6-<arm>`, `b6-results` (§12.1-§12.2) | D20; after the Stage-3 photo decision |
+| Baseline B6, OmniFuser-RUL: caches, 13 study arms, results | Ruche jobs `b6-prepare`, `b6-<arm>`, `b6-results` (§12.1-§12.2) | D20; after the Stage-3 photo decision |
 | Reading reports, writing the log | Laptop | Results are copied back (§13) |
 
 ### The path at a glance
@@ -398,7 +398,7 @@ Each job writes `runs/logs/<name>-<ID>.out` in the repository folder.
 | `usage baselines` | `B0: mae 411.972`, `B1: mae 512.547`, `B2: mae 467.843, … coverage90 0.503, winkler90 5388.189` (plan §2.7) |
 | `offline weights` | Two `ok` lines, each with a non-empty `revision` |
 | `offline weights for B6` | `ok efficientnet_b0 …/torch_cache/hub/checkpoints/efficientnet_b0_rwightman-7f5810bc.pth \| omnifuser 1.1.0 \| torch 2.x+cu126 \| torchvision 0.y+cu126`. `B6 not installed: skipped` means §7.2 ran without the `omnifuser` extra |
-| `tests` | `130 passed, 2 skipped` (132 tests as of 2026-11-05), no failure. The two skips are the comparisons with OmniFuser's records, whose checkout is not on Ruche. The two `weights` tests and the 21 B6 tests must **pass**: they prove offline loading and B6 on this environment. Without OmniFuser installed the B6 module is skipped instead (21 fewer passes), which is not an error for Stage 3 |
+| `tests` | `149 passed, 2 skipped` (151 tests as of 2026-11-06), no failure. The two skips are the comparisons with OmniFuser's records, whose checkout is not on Ruche. The two `weights` tests and the B6 tests (`test_omnifuser_rul.py`, `test_models.py`) must **pass**: they prove offline loading and B6 on this environment. Without OmniFuser installed the B6 module is skipped instead, which is not an error for Stage 3. The B6 tests take a few minutes of CPU |
 
 The store signature must equal the laptop's (`rulfuse store-info` on both): the same
 inputs give the same signature, so caches copied home fit the laptop's store.
@@ -477,7 +477,7 @@ reference.
 |---|---|---|---|
 | J1 | 4 | Pilot: one fold, F1 on the cached features; measures the cost of a fit | `gpua100` |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds (array) | `gpua100` |
-| J6 | 5 | Gate 2b: 4 options + 1 control × 10 folds | `gpua100` |
+| J6 | 5 | Gate 2b: 4 options + 3 controls × 10 folds | `gpua100` |
 | J7 | 5 | Sweep: 10 variants × 10 folds | `gpua100` |
 | J8 | 6 | Gate 3: 2 heads × 10 folds, 4 inner fits per seed | `gpua100` |
 | J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each | `gpua100` |
@@ -485,7 +485,7 @@ reference.
 | J12 | 8 | Sensitivity tiers 1 and 2 | `gpua100` |
 | J13 | 9 | Report | `cpu_short` |
 | `b6-pilot`, `b6-prepare` | 3 (after J3) | Baseline B6: one pilot fit; the descriptor and EfficientNet-B0 caches (§12.1) | `gpua100` |
-| `b6-<arm>` × 11 | 5-6 | B6 study, 30 fits per arm (§12.1) | `gpua100` |
+| `b6-<arm>` × 13 | 5-6 | B6 study, 30 fits per arm (version 3: 1 s steps, memory, temporal loss) (§12.1) | `gpua100` |
 | `b6-results` | 6; again after 2026-12-01 | B6 results and archive (§12.2) | `cpu_short` |
 
 Rules that will hold for all of them: arrays with `%4` (at most 4 GPUs at once), resumable
@@ -502,6 +502,19 @@ photo types are admitted (J3), and nothing from Stages 4-9.
 as tag `v1.1`, commit `eac0fed`), §8 fetched EfficientNet-B0, and J0's log shows the
 `offline weights for B6` line and the B6 tests passing.
 
+**What B6 is since version 3** (2026-11-06, `docs/OMNIFUSER_RUL_PLAN.md` O7-O11):
+
+- **1 s steps.** B6 trains on its own store cut at 1 s, OmniFuser's native step:
+  36,919 prediction points, about 29,000 per fold instead of 3,000. It is scored and
+  selected on the 10 s points, the same 3,747 as RUL-Fuse and B0-B5.
+- **Memory.** A GRU memory of each tool's whole history.
+- **Temporal loss.** It penalizes a predicted RUL that rises over time, plus the slope
+  term.
+- **Ablations.** Two arms measure the memory and the temporal terms.
+
+`b6-prepare` builds the 1 s store, its descriptor cache (about a minute) and the photo
+features (shared with any segment length).
+
 **Pilot** (one fold, one seed, before the study; it also builds the caches):
 
 ```bash
@@ -509,20 +522,30 @@ sbatch --job-name=b6-pilot --time=01:00:00 slurm/job.sbatch \
   python -m rulfuse.cli omnifuser-arm --players force tool --folds 1 --seeds 0 --feature-device cuda
 ```
 
-The log ends with `epoch N kept; S s`. S is the cost of one fit; the study is 330 fits
-(11 arms × 10 folds × 3 seeds), so 11 × 30 × S over 4 GPUs at a time. With S = 3 min that
-is about 16 GPU-hours and half a day of wall time. If S is far above 3 min, report it before
-the study: each arm job is given 8 hours (30 fits).
+Each epoch logs `validation MAE … s; loss mse … hinge … slope …`, and the log ends with
+`epoch N kept; S s`. S is the cost of one fit. The study is 390 fits (13 arms × 10 folds × 3
+seeds), so 13 × 30 × S over 4 GPUs at a time.
 
-The pilot's fit is kept: the study's `force+tool` arm finds `fold-01/seed-0` finished and
-skips it.
+| Pilot's S | Decision, before the study starts (a cost decision, not a result) |
+|---|---|
+| up to about 6 min | Study as is: about 20-40 GPU-hours, about a day of wall time |
+| 6-15 min | Halve the pair budget for the whole study: `-- --pairs-per-epoch 1024` (below) |
+| above 15 min | Also split each arm over two jobs (`--folds 1 2 3 4 5` and `--folds 6 7 8 9 10`), or report it first |
 
-**The study** (one cache job plus 11 arm jobs; the players are `force` and the photo types
+The pilot's fit is kept only if the study uses the same settings: the study's
+`force+tool` arm then finds `fold-01/seed-0` finished and skips it.
+
+**The study** (one cache job plus 13 arm jobs; the players are `force` and the photo types
 J3 admitted):
 
 ```bash
 bash slurm/omnifuser_rul.sh force tool chip
+bash slurm/omnifuser_rul.sh force tool chip -- --pairs-per-epoch 1024   # if the pilot says so
 ```
+
+Options after `--` go to the cache job, the arm listing and every arm job. The results
+job must be given the same ones, because they select the fits it scores. The script
+prints that command.
 
 The script refuses to submit when:
 
@@ -548,7 +571,8 @@ report), run the results job:
 sbatch --job-name=b6-results slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip
 ```
 
-It runs `rulfuse omnifuser-results` and writes
+Add `-- OPTIONS` with the study's options if it was submitted with any. It runs
+`rulfuse omnifuser-results` and writes
 `$RULFUSE_DATA_ROOT/runs/omnifuser_rul/nonastreda-<store>/results/`:
 
 | File | Content |
@@ -556,7 +580,7 @@ It runs `rulfuse omnifuser-results` and writes
 | `RESULTS.md` | The tables below, readable as is |
 | `progress.json` | Per arm: fits done of 30, stale fits (other settings), the missing (fold, seed) pairs, selected epochs, fit times |
 | `curves.csv` | The validation MAE of every epoch of every fit |
-| `validation_per_unit.csv`, `analysis-validation.json` | Every arm's 3-seed ensemble on each fold's validation tool: window MAE, RMSE, bias, whole-life MAE, with B2 on the same points |
+| `validation_per_unit.csv`, `analysis-validation.json` | Every arm's 3-seed ensemble on each fold's validation tool, scored on the 10 s points: window MAE, RMSE, bias, whole-life MAE, with B2 on the same points; and the temporal stability over every 1 s point (share of rising steps, mean rise, \|Δŷ + Δτ\|) |
 | `choices.json` | The comparisons fixed on validation (best single arm, best pair, best photos-only pair, best force + photo pair, and v(∅) = B2 or the usage-only arm), with the time they were recorded |
 
 It then packs the whole `runs/omnifuser_rul` folder: every fit's predictions and
@@ -569,7 +593,7 @@ It then packs the whole `runs/omnifuser_rul` folder: every fit's predictions and
 | Section | Look for |
 |---|---|
 | Fits | Every arm `30/30`, `Stale 0`, nothing missing. "Best triple at the end" counts fits whose validation error was still falling at epoch 30; many such fits mean 30 epochs were too few (a fact to report, not a reason to change B6 before the freeze) |
-| Validation units | Window MAE per arm against B2 (464.7 s on the validation tools) and the number of tools where the arm beats B2 |
+| Validation units | Window MAE per arm against B2 (464.7 s on the validation tools) and the number of tools where the arm beats B2. The `-nomemory` and `-notemporal` rows against `force+tool+chip` say what the memory and the temporal terms add; "Rising steps" should be well below its value without the temporal terms |
 | Comparisons fixed on validation | Recorded **before 2026-12-01**: run this job once after the last arm completes and before the freeze (plan stage E, by 2026-11-25), so the test read cannot choose its own comparison |
 
 **Test scores (from 2026-12-01).** The test predictions are already in the archive; scoring
@@ -711,7 +735,7 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 | Store details | `rulfuse store-info` |
 | A long job in parts | `bash slurm/chain.sh N --job-name=NAME slurm/job.sbatch COMMAND …` |
 | B6 pilot | `sbatch --job-name=b6-pilot --time=01:00:00 slurm/job.sbatch python -m rulfuse.cli omnifuser-arm --players force tool --folds 1 --seeds 0 --feature-device cuda` |
-| B6 study | `bash slurm/omnifuser_rul.sh force tool chip` (the admitted photo types) |
+| B6 study | `bash slurm/omnifuser_rul.sh force tool chip` (the admitted photo types; `-- --pairs-per-epoch 1024` if the pilot asks) |
 | B6 results (validation; packs the archive) | `sbatch --job-name=b6-results slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip` |
 | B6 test read (from 2026-12-01) | the same with `--after-freeze` before the players |
 | Copy home | §13 |

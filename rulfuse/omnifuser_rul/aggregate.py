@@ -52,8 +52,21 @@ def check_seal(role: str, after_freeze: bool, today: date | None = None) -> None
         )
 
 
-def load_predictions(folder: Path) -> dict[str, np.ndarray]:
+def load_predictions(folder: Path, signature: dict | None = None) -> dict[str, np.ndarray]:
+    """Every fit's predictions under an arm folder; with ``signature`` (an
+    ``ArmSpec.signature()``), only the fits whose ``fit.json`` records those settings, so a
+    partly rerun arm never mixes fits made with other settings."""
+    import json
+
     files = sorted(folder.glob("fold-*/seed-*/predictions.parquet"))
+    if signature is not None:
+        files = [
+            f
+            for f in files
+            if (f.parent / "fit.json").is_file()
+            and json.loads((f.parent / "fit.json").read_text(encoding="utf-8")).get("spec")
+            == signature
+        ]
     if not files:
         raise FileNotFoundError(f"no predictions under {folder}")
     tables = [pq.read_table(f) for f in files]
@@ -115,11 +128,12 @@ def score_arm(
     role: str = "validation",
     after_freeze: bool = False,
     today: date | None = None,
+    signature: dict | None = None,
 ) -> dict:
     """Per-unit scores of the arm's seed ensemble on the evaluation grid, the temporal
-    stability over every point, and the summaries."""
+    stability over every point, and the summaries (only fits with ``signature``, if given)."""
     check_seal(role, after_freeze, today)
-    combined = ensemble(load_predictions(folder), role)
+    combined = ensemble(load_predictions(folder, signature), role)
     seg = store.segments
     per_unit = {}
     grid = combined["on_grid"].astype(bool)

@@ -39,7 +39,9 @@ def test_memory_reads_only_complete_blocks():
         changed = x.clone()
         changed[:, 9, 0] += 5.0  # the step that completes block 1 changes its own state only
         new = memory(changed)
-        assert torch.allclose(new[:, :9], states[:, :9]) and not torch.allclose(new[:, 9], states[:, 9])
+        assert torch.allclose(new[:, :9], states[:, :9]) and not torch.allclose(
+            new[:, 9], states[:, 9]
+        )
 
 
 def test_memory_sees_a_rise_shared_by_every_input():
