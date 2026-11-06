@@ -29,6 +29,7 @@ def _nonastreda_options(args: argparse.Namespace) -> dict:
         "ttf_rule": args.ttf_rule,
         "raw": args.raw,
         "store_dir": args.force_store,
+        "segment_s": getattr(args, "segment_s", None),
     }
 
 
@@ -191,7 +192,8 @@ def _omnifuser_inputs(args: argparse.Namespace):
 
     ds, store = _dataset_and_store(args)
     kinds = sorted(store.image_specs)
-    steps = data.build_steps(store, data.descriptor_cache(store, ds.signals), kinds)
+    descriptors = data.descriptor_cache(store, ds.signals)
+    steps = data.build_steps(store, descriptors, kinds, eval_grid_s=args.eval_grid_s)
     features = data.image_feature_cache(store, device=args.feature_device)
     return store, steps, features, kinds
 
@@ -205,6 +207,13 @@ def _arm_spec(args: argparse.Namespace, players: list[str]):
         modality_dropout=args.modality_dropout,
         epochs=args.epochs,
         seeds=tuple(args.seeds),
+        memory=not args.no_memory,
+        memory_hidden=args.memory_hidden,
+        memory_block=args.memory_block,
+        mono_weight=args.mono_weight,
+        slope_weight=args.slope_weight,
+        max_lag=args.max_lag,
+        pairs_per_epoch=args.pairs_per_epoch,
     )
 
 
@@ -238,6 +247,10 @@ def cmd_omnifuser_study(args: argparse.Namespace) -> int:
                 options.append("--no-usage")
             if spec.modality_dropout:
                 options += ["--modality-dropout", f"{spec.modality_dropout:g}"]
+            if not spec.memory:
+                options.append("--no-memory")
+            if not spec.temporal:
+                options += ["--mono-weight", "0", "--slope-weight", "0"]
             print(f"{spec.name}\t{' '.join(options)}")
         return 0
     store, steps, features, kinds = _omnifuser_inputs(args)
@@ -286,8 +299,11 @@ def cmd_omnifuser_results(args: argparse.Namespace) -> int:
     return 0
 
 
+B6_SEGMENT_S = 1.0  # O7: OmniFuser's native 1 s step (docs/OMNIFUSER_RUL_PLAN.md)
+
+
 def _add_omnifuser_options(p: argparse.ArgumentParser, players: bool = True) -> None:
-    _add_dataset_options(p)
+    _add_dataset_options(p, segment_s=B6_SEGMENT_S)
     if players:
         p.add_argument(
             "--players",
@@ -303,10 +319,26 @@ def _add_omnifuser_options(p: argparse.ArgumentParser, players: bool = True) -> 
     p.add_argument("--device", default="auto", help="training device: auto | cpu | cuda")
     p.add_argument("--feature-device", default="cpu", help="photo-feature extraction device")
     p.add_argument("--runs-root", type=Path, default=paths.runs_dir() / "omnifuser_rul")
+    p.add_argument(
+        "--eval-grid-s", type=float, default=10.0, help="evaluation and selection grid (D7)"
+    )
+    p.add_argument("--no-memory", action="store_true", help="no GRU memory (ablation, O8)")
+    p.add_argument("--memory-hidden", type=int, default=64)
+    p.add_argument("--memory-block", type=int, default=10, help="steps per memory block")
+    p.add_argument("--mono-weight", type=float, default=1.0, help="monotonic hinge (O9)")
+    p.add_argument("--slope-weight", type=float, default=0.5, help="slope consistency (O9)")
+    p.add_argument("--max-lag", type=int, default=200, help="largest pair lag, in steps")
+    p.add_argument("--pairs-per-epoch", type=int, default=2048)
 
 
-def _add_dataset_options(p: argparse.ArgumentParser) -> None:
+def _add_dataset_options(p: argparse.ArgumentParser, segment_s: float = 10.0) -> None:
     p.add_argument("--dataset", default="nonastreda", choices=["nonastreda"])
+    p.add_argument(
+        "--segment-s",
+        type=float,
+        default=segment_s,
+        help=f"segment length S in seconds (default {segment_s:g}; D7 is 10 s)",
+    )
     p.add_argument(
         "--raw", type=Path, default=None, help="default: $RULFUSE_DATA_ROOT/raw/<dataset>"
     )

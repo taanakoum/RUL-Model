@@ -52,6 +52,7 @@ ADAPTER_VERSION = 1
 NAME = "nonastreda"
 HORIZON_S = 1500.0  # D3
 BASELINE_RECORDINGS = 4  # B
+SEGMENT_S = 10.0  # D7
 CHANNELS = tuple(
     ChannelSpec(name, "force", name[-1], "raw", "N") for name in FORCE_CHANNELS
 )  # Fx, Fy, Fz
@@ -205,7 +206,12 @@ def provenance(data: NonastredaData) -> dict:
     }
 
 
-def to_dataset(data: NonastredaData) -> Dataset:
+def to_dataset(data: NonastredaData, segment_s: float = SEGMENT_S) -> Dataset:
+    """The schema view. ``segment_s`` is the segment length S (D7: 10 s; a remainder under
+    S/2 joins the previous segment). It changes only where the core cuts segments: failure
+    times, the HI and the images are the same for every S."""
+    if not segment_s > 0:
+        raise ValueError("segment_s must be > 0")
     return Dataset(
         name=NAME,
         units=to_units(data),
@@ -215,6 +221,8 @@ def to_dataset(data: NonastredaData) -> Dataset:
             sample_rate_hz=float(SAMPLE_RATE_HZ),
             model_rate_hz=float(SAMPLE_RATE_HZ),
             baseline_recordings=BASELINE_RECORDINGS,
+            segment_s=float(segment_s),
+            min_remainder_s=float(segment_s) / 2.0,
             hi_name="flank wear (um)",
         ),
         signals=ForceSignals(data.store),
@@ -228,6 +236,7 @@ def load(
     options: NonastredaOptions | None = None,
     raw: str | Path | None = None,
     store_dir: str | Path | None = None,
+    segment_s: float = SEGMENT_S,
 ) -> Dataset:
     """The Nonastreda dataset in the generic schema."""
-    return to_dataset(load_data(options, raw, store_dir))
+    return to_dataset(load_data(options, raw, store_dir), segment_s)

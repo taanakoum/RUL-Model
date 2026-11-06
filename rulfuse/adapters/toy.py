@@ -45,6 +45,7 @@ def build(
     horizon_s: float = 600.0,
     recording_s: tuple[float, float] = (20.0, 30.0),
     after_failure: int = 3,
+    segment_s: float = 10.0,
 ) -> Dataset:
     """Generate the toy dataset; images are written under ``root``."""
     root = Path(root)
@@ -105,6 +106,8 @@ def build(
             sample_rate_hz=RATE_HZ,
             model_rate_hz=1000.0,
             baseline_recordings=3,
+            segment_s=segment_s,
+            min_remainder_s=segment_s / 2.0,
             hi_name="synthetic wear",
         ),
         signals=ArraySignals(arrays),

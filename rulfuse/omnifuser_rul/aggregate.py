@@ -1,9 +1,12 @@
 """Scores, the test seal, Shapley values and the two-modality test
 (docs/OMNIFUSER_RUL_PLAN.md §7-§8; PROJECT_PLAN.md §10.3, §11, D15).
 
-* An arm's predictions are averaged over its seeds (the ensemble), then scored per unit:
-  window MAE / RMSE / bias (RUL ≤ H, the headline) and the whole-life MAE of the capped
-  target. Summaries: mean ± sd over units, and pooled over all window points.
+* An arm's predictions are averaged over its seeds (the ensemble), then scored per unit on
+  the evaluation grid (the project's 10 s points, ``on_grid``; B6 predicts at every 1 s
+  point): window MAE / RMSE / bias (RUL ≤ H, the headline) and the whole-life MAE of the
+  capped target. The temporal stability (``metrics.temporal_stability``: how often and by
+  how much the prediction rises, and |Δŷ + Δτ|) is measured over every prediction point.
+  Summaries: mean ± sd over units, and pooled over all window points.
 * Test units are sealed until the design freeze: ``role="test"`` needs ``after_freeze``
   and a date on or after ``FREEZE``.
 * Shapley values over the players, with v(S) = −window MAE per test unit.
@@ -26,7 +29,8 @@ import pyarrow.parquet as pq
 from rulfuse import metrics as M
 from rulfuse.baselines import b2
 from rulfuse.core.folds import leave_one_unit_out
-from rulfuse.core.store import SegmentStore
+from rulfuse.core.store import SegmentStore, grid_mask
+from rulfuse.omnifuser_rul.data import EVAL_GRID_S
 from rulfuse.omnifuser_rul.train import FORCE
 
 FREEZE = date(2026, 12, 1)
@@ -54,10 +58,13 @@ def load_predictions(folder: Path) -> dict[str, np.ndarray]:
         raise FileNotFoundError(f"no predictions under {folder}")
     tables = [pq.read_table(f) for f in files]
     columns = tables[0].column_names
-    return {
+    out = {
         c: np.concatenate([t.column(c).to_numpy(zero_copy_only=False) for t in tables])
         for c in columns
     }
+    if "on_grid" not in out:  # predictions made at the grid's own points
+        out["on_grid"] = np.ones(len(out["row"]), dtype=bool)
+    return out
 
 
 def ensemble(predictions: dict[str, np.ndarray], role: str) -> dict[str, np.ndarray]:
@@ -69,6 +76,7 @@ def ensemble(predictions: dict[str, np.ndarray], role: str) -> dict[str, np.ndar
         predictions["prediction_s"][keep],
     )
     unit = predictions["unit"][keep]
+    on_grid = predictions["on_grid"][keep].astype(bool)
     keys, inverse, counts = np.unique(
         np.stack([fold, row], axis=1), axis=0, return_inverse=True, return_counts=True
     )
@@ -80,6 +88,7 @@ def ensemble(predictions: dict[str, np.ndarray], role: str) -> dict[str, np.ndar
         "fold": keys[:, 0],
         "row": keys[:, 1],
         "unit": unit[first],
+        "on_grid": on_grid[first],
         "prediction_s": total / counts,
         "seeds": counts,
     }
@@ -107,17 +116,33 @@ def score_arm(
     after_freeze: bool = False,
     today: date | None = None,
 ) -> dict:
-    """Per-unit scores of the arm's seed ensemble, with the two summaries."""
+    """Per-unit scores of the arm's seed ensemble on the evaluation grid, the temporal
+    stability over every point, and the summaries."""
     check_seal(role, after_freeze, today)
     combined = ensemble(load_predictions(folder), role)
+    seg = store.segments
     per_unit = {}
+    grid = combined["on_grid"].astype(bool)
     for unit in dict.fromkeys(combined["unit"].tolist()):
         mine = combined["unit"] == unit
-        per_unit[str(unit)] = score_rows(
-            store, combined["row"][mine], combined["prediction_s"][mine]
-        )
-    pooled = score_rows(store, combined["row"], combined["prediction_s"])
-    keys = ("window_mae", "window_rmse", "window_bias", "whole_life_mae")
+        on = mine & grid
+        scores = score_rows(store, combined["row"][on], combined["prediction_s"][on])
+        rows = combined["row"][mine]
+        order = np.argsort(seg["tau_s"][rows].astype(float), kind="stable")
+        rows, prediction = rows[order], combined["prediction_s"][mine][order]
+        uncapped = seg["y_s"][rows].astype(float) < store.settings.horizon_s - 1e-6
+        stability = M.temporal_stability(prediction, seg["tau_s"][rows].astype(float), uncapped)
+        per_unit[str(unit)] = {**scores, **stability, "points_all": int(len(rows))}
+    pooled = score_rows(store, combined["row"][grid], combined["prediction_s"][grid])
+    keys = (
+        "window_mae",
+        "window_rmse",
+        "window_bias",
+        "whole_life_mae",
+        "increase_rate",
+        "mean_increase_s",
+        "slope_error_s",
+    )
     summary = {
         k: {
             "mean": float(np.mean([s[k] for s in per_unit.values() if k in s])),
@@ -136,17 +161,21 @@ def score_arm(
     }
 
 
-def b2_by_unit(store: SegmentStore, role: str = "validation") -> dict[str, float]:
-    """B2's window MAE on each fold's validation (or test) unit, with that fold's training units."""
+def b2_by_unit(
+    store: SegmentStore, role: str = "validation", grid_s: float = EVAL_GRID_S
+) -> dict[str, float]:
+    """B2's window MAE on each fold's validation (or test) unit, with that fold's training
+    units, on the evaluation grid's points (the same points as the arms)."""
     seg = store.segments
     horizon = store.settings.horizon_s
+    on_grid = grid_mask(store, grid_s)
     out = {}
     for fold in leave_one_unit_out(store.unit_names):
         unit = fold.validation if role == "validation" else fold.test
         failures = np.array(
             [store.units[u]["failure_s"] for u in fold.train if store.units[u]["failure_s"]], float
         )
-        keep = (seg["unit"] == unit) & seg["window"].astype(bool)
+        keep = (seg["unit"] == unit) & seg["window"].astype(bool) & on_grid
         tau, rul = seg["tau_s"][keep].astype(float), seg["rul_s"][keep].astype(float)
         out[unit] = M.mae(rul, b2(failures, tau, horizon))
     return out

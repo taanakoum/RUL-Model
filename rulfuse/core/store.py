@@ -54,6 +54,32 @@ def image_visible(available_s: np.ndarray | float, tau_s: np.ndarray | float):
     return np.asarray(available_s) < np.asarray(tau_s) - TIME_TOLERANCE_S
 
 
+def grid_mask(
+    store: SegmentStore, grid_s: float, min_remainder_s: float | None = None
+) -> np.ndarray:
+    """Per segment row: does its end coincide with a segment end of the grid with segment
+    length ``grid_s`` (remainder rule ``grid_s / 2``)? A store cut at S finer than ``grid_s``
+    contains every point of the coarser grid when ``grid_s`` is a multiple of S, with the same
+    τ and RUL (the cuts start at each recording's start), so a model trained on fine points can
+    be scored on exactly the coarse grid's points."""
+    rem = grid_s / 2.0 if min_remainder_s is None else min_remainder_s
+    seg, rec = store.segments, store.recordings
+    out = np.zeros(len(seg["unit"]), dtype=bool)
+    duration = {
+        (str(u), int(i)): float(d)
+        for u, i, d in zip(rec["unit"], rec["index"], rec["duration_s"], strict=True)
+    }
+    keys = np.char.add(np.asarray(seg["unit"]).astype(str), "|")
+    keys = np.char.add(keys, np.asarray(seg["recording"]).astype(str))
+    for key in np.unique(keys):
+        rows = np.flatnonzero(keys == key)
+        unit, index = key.rsplit("|", 1)
+        ends = segment_ends(duration[(unit, int(index))], grid_s, rem)
+        elapsed = seg["elapsed_s"][rows].astype(float)
+        out[rows] = np.isclose(elapsed[:, None], ends[None], atol=TIME_TOLERANCE_S).any(axis=1)
+    return out
+
+
 def stable_hash(obj: object, length: int = 12) -> str:
     text = json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]

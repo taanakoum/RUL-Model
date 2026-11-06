@@ -16,5 +16,11 @@ def load_dataset(name: str, **options: object) -> Dataset:
 
         raw = options.pop("raw", None)
         store_dir = options.pop("store_dir", None)
-        return load(NonastredaOptions(**options), raw=raw, store_dir=store_dir)  # type: ignore[arg-type]
+        segment_s = float(options.pop("segment_s", None) or 10.0)  # type: ignore[arg-type]
+        return load(
+            NonastredaOptions(**options),  # type: ignore[arg-type]
+            raw=raw,  # type: ignore[arg-type]
+            store_dir=store_dir,  # type: ignore[arg-type]
+            segment_s=segment_s,
+        )
     raise ValueError(f"unknown dataset {name!r}; adapters: {ADAPTERS}")

@@ -4,7 +4,12 @@ Players: ``force`` and the admitted image types. Usage is on in every arm. The a
 
 * every non-empty subset of the players, and the usage-only arm (the empty coalition);
 * ``force`` and the first image type with usage off (sensing without usage, Q4);
-* all players trained with modality dropout 0.2 (reliance, Q3).
+* all players trained with modality dropout 0.2 (reliance, Q3);
+* all players without the memory, and without the temporal loss terms (the two ablations of
+  version 3: do the memory (O8) and the monotonic and slope terms (O9) help?).
+
+Shapley values and the paired tests use only the arms with usage on, no dropout and the
+base memory and loss settings.
 """
 
 from __future__ import annotations
@@ -34,7 +39,22 @@ def modality_arms(players: Sequence[str], base: ArmSpec | None = None) -> list[A
     if photos:
         arms.append(replace(base, players=(photos[0],), usage=False))
     arms.append(replace(base, players=players, modality_dropout=0.2))
+    if base.memory:
+        arms.append(replace(base, players=players, memory=False))
+    if base.temporal:
+        arms.append(replace(base, players=players, mono_weight=0.0, slope_weight=0.0))
     return arms
+
+
+def is_coalition_arm(spec: ArmSpec, base: ArmSpec) -> bool:
+    """An arm of the modality game: usage on, no dropout, the base memory and loss."""
+    return (
+        spec.usage
+        and not spec.modality_dropout
+        and spec.memory == base.memory
+        and spec.mono_weight == base.mono_weight
+        and spec.slope_weight == base.slope_weight
+    )
 
 
 def analyse(
@@ -70,7 +90,7 @@ def analyse(
     coalitions = {
         frozenset(spec.players): spec.name
         for spec in arms
-        if spec.usage and not spec.modality_dropout and spec.players
+        if is_coalition_arm(spec, base) and spec.players
     }
     window = {c: per_unit(name, test) for c, name in coalitions.items()}
     validation_mean = {
