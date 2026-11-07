@@ -68,7 +68,7 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D18 | Core and adapter | Everything dataset-specific lives in one **adapter** that turns a dataset into generic units, recordings and observations with a failure time per unit. The **core** (segments, targets, features, tokens, model, training, calibration, evaluation) never refers to passes, runs, blocks, named photo types or flank wear (§6.11) | You (2026-11-04) |
 | D19 | Seeds | **3 seeds everywhere:** gate decisions and the final model are 3-seed ensembles | You (2026-11-04) |
 | D20 | OmniFuser baseline | **B6, OmniFuser-RUL:** the OmniFuser architecture (frozen EfficientNet-B0 photos, C2F fusion, an RUL head) on this project's targets, processing, folds, weights, selection and metrics. A separate model: no RUL-Fuse decision reads it. Test reads follow D15. Plan: `docs/OMNIFUSER_RUL_PLAN.md` Version 3 (2026-11-06): 1 s steps scored on the 10 s points, a GRU memory and the temporal loss (D21, D22). **Version 4 (2026-11-07): one configuration trained once (10 folds × 3 seeds) and reported; no modality study and no comparison of settings** | You (2026-11-05, 2026-11-06) |
-| D21 | Memory | **A causal recurrent memory of each unit's whole history** (`rulfuse.models.memory.CausalMemory`, a GRU over block means of the step inputs; step t reads only complete blocks). B6 uses it now. In RUL-Fuse, F1 and F0's signal expert concatenate its state (over the force tokens, block 1) with their output at every force token before the head; Gate 2b reports a no-memory control (§7.5). F1's attention already reaches the whole history; the memory adds a running summary that is cheap at any length | You (2026-11-06): each new segment uses the information of all previous ones |
+| D21 | Memory | **A causal recurrent memory of each unit's whole history** (`rulfuse.models.memory.CausalMemory`, a GRU over block means of the step inputs; step t reads only complete blocks). B6 uses it now: since 2026-11-08 (your request) its GRU reads OmniFuser's encoded force series and encoded photos of each complete 96-step block (`CausalMemory.forward_blocks`). In RUL-Fuse, F1 and F0's signal expert concatenate its state (over the force tokens, block 1) with their output at every force token before the head; Gate 2b reports a no-memory control (§7.5). F1's attention already reaches the whole history; the memory adds a running summary that is cheap at any length | You (2026-11-06): each new segment uses the information of all previous ones |
 | D22 | Rising predictions | **Penalized in the loss of both models** (`rulfuse.models.losses`): λ_mono · relu(μ_later − μ_earlier) on pairs of points of one unit (RUL can only fall), with the slope-consistency term where the target is below the cap; λ_mono = 1/15 and λ_cons = 0.05 on y/H in both models (§6.7). **Both terms move only the earlier prediction of a pair; the later one is the fixed reference** | You (2026-11-06). Weights and reference changed 2026-11-07, after your question: with 1.0 on both predictions, an earlier prediction the model cannot correct dragged later ones down to it |
 | D23 | Inference modes | **Two modes for every model's predictions** (`rulfuse.inference`): **current**, each prediction as the model makes it (the primary result); **context**, where the unit's earlier predictions, aged by the operating time since, are blended with the new one (time constant 120 s and cap margin H/15, fixed in advance). Both are reported side by side with a paired comparison and a decision rule fixed in advance (§10.3). B6 reports both now; RUL-Fuse's evaluation uses the same function | You (2026-11-07): a mode where previous segments guide the new prediction, and a way to compare the two |
 
@@ -1646,10 +1646,10 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J11 | 8 | Shapley: 7 coalitions × 10 folds (15 if the workpiece passes) | 70 (150) | 210 (450) | 5 (11) GPU-h |
 | J12 | 8 | Sensitivity tier 1 (5 refit arms) / tier 2 (up to 9 arms + features) | 50 / 90 | 150 / 270 | 4 / 8 GPU-h |
 | J13 | 9 | Report | 1 | – | 15 min |
-| B6 | after J3 | B6 OmniFuser-RUL, the full run: caches, then 10 folds × 3 seeds (`b6-train`, `slurm/omnifuser_rul.sh`) | 1 | 30 | 1.5-3 GPU-h |
+| B6 | after J3 | B6 OmniFuser-RUL, the full run: caches, then 10 folds × 3 seeds (`b6-train`, `slurm/omnifuser_rul.sh`) | 1 | 30 | 2.5-7.5 GPU-h |
 | B6-R | after B6, and from 2026-12-01 | B6's report (`b6-report`, `slurm/omnifuser_results.sh`; test results from the freeze or with `--unseal`) | 1 | – | 5 min |
 
-The total is about 40-50 A100-hours for RUL-Fuse (the Stage-3 feature job adds under one), plus 1.5-3 for baseline B6's single run. Submit arrays in the evening; run
+The total is about 40-50 A100-hours for RUL-Fuse (the Stage-3 feature job adds under one), plus 2.5-7.5 for baseline B6's single run. Submit arrays in the evening; run
 `status.sh` each morning.
 
 ### 16.5 Safe practice
@@ -1964,7 +1964,7 @@ Each has a default that the plan assumes until you answer.
 | Projection | LayerNorm + shared low-rank projection (rank 16) per modality; no PCA | §6.3, §6.10 |
 | Tool baseline and token mode | First B = 4 recordings, causal running mean; token mode "both" (absolute + relative halves); readouts absolute | §5.9 |
 | Fusion | F1 or F0 (Gate 2a) | §6.4 |
-| Memory | GRU, hidden 64, over the force tokens (B6: 10-step blocks of 1 s steps) | D21 |
+| Memory | GRU, hidden 64, over the force tokens (B6: OmniFuser's encodings of each 96-step block of 1 s steps) | D21 |
 | F1 backbone | Causal transformer: 2 layers, d = 64, 4 heads, FFN 128, dropout 0.2, relative-time bias | §6.4 |
 | Head | Student-t RUL in seconds: μ = H·sigmoid; σ floor 0.005·H; ν = 3 + softplus | §6.6 |
 | Loss weights | MSE 1; NLL 0.5 (mean detached); consistency 0.5; monotonic hinge 1.0; HI 0.3 | §6.7, D22 |

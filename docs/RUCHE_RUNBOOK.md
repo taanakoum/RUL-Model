@@ -398,7 +398,7 @@ Each job writes `runs/logs/<name>-<ID>.out` in the repository folder.
 | `usage baselines` | `B0: mae 411.972`, `B1: mae 512.547`, `B2: mae 467.843, … coverage90 0.503, winkler90 5388.189` (plan §2.7) |
 | `offline weights` | Two `ok` lines, each with a non-empty `revision` |
 | `offline weights for B6` | `ok efficientnet_b0 …/torch_cache/hub/checkpoints/efficientnet_b0_rwightman-7f5810bc.pth \| omnifuser 1.1.0 \| torch 2.x+cu126 \| torchvision 0.y+cu126`. `B6 not installed: skipped` means §7.2 ran without the `omnifuser` extra |
-| `tests` | `162 passed, 2 skipped` (164 tests as of 2026-11-07), no failure. The two skips are the comparisons with OmniFuser's records, whose checkout is not on Ruche. The two `weights` tests and the B6 tests (`test_omnifuser_rul.py`, `test_models.py`) must **pass**: they prove offline loading and B6 on this environment. Without OmniFuser installed the B6 module is skipped instead, which is not an error for Stage 3. The B6 tests take a few minutes of CPU |
+| `tests` | `165 passed, 2 skipped` (167 tests as of 2026-11-08), no failure. The two skips are the comparisons with OmniFuser's records, whose checkout is not on Ruche. The two `weights` tests and the B6 tests (`test_omnifuser_rul.py`, `test_models.py`) must **pass**: they prove offline loading and B6 on this environment. Without OmniFuser installed the B6 module is skipped instead, which is not an error for Stage 3. The B6 tests take a few minutes of CPU |
 
 The store signature must equal the laptop's (`rulfuse store-info` on both): the same
 inputs give the same signature, so caches copied home fit the laptop's store.
@@ -504,7 +504,7 @@ photo types are admitted (J3), and nothing from Stages 4-9.
 |---|---|
 | Inputs | Force (7 level descriptors × 4 channels, a signal flag) + every photo type J3 admits (frozen EfficientNet-B0 features) + usage (operating time, seconds into the recording) |
 | Steps | 1 s segments, OmniFuser's own step; windows of 96 steps; scored on the project's 10 s points |
-| Model | OmniFuser v1.1's encoder (d = 32, C2F fusion) + a **GRU** memory of the whole history (hidden 64, 10-step blocks) + a linear RUL head |
+| Model | OmniFuser v1.1's encoder (d = 32, C2F fusion) + a **GRU** memory of the whole history (hidden 64) that reads OmniFuser's encoded force series and encoded photos of each complete 96-step block + a linear RUL head |
 | Loss | Point-weighted MSE **+ 1/15 × monotonic penalty** (a predicted RUL higher than an earlier one of the same tool) **+ 0.05 × slope consistency** (below the cap, RUL falls by exactly the elapsed time). Both terms move only the earlier prediction of a pair, so a wrong early prediction never drags later ones down |
 | Inference | Two modes from the same fits: **current** (each prediction as the model makes it; the primary result) and **context** (the tool's earlier predictions, aged by the time since, blended with the new one; time constant 120 s). The report compares them |
 | Training | Adam, learning rate 1e-4, 30 epochs of 2,048 pairs, gradients clipped at 1; epoch chosen on each fold's validation tool |
@@ -527,7 +527,7 @@ It submits two jobs:
 
 | Job | Partition | Content | Expected time |
 |---|---|---|---|
-| `b6-train` | `gpua100`, 8 h limit | The 1 s store, its descriptor cache (about a minute), the photo features (a few minutes), then the 30 fits | 3-6 min per fit, about 1.5-3 h in all |
+| `b6-train` | `gpua100`, 16 h limit | The 1 s store, its descriptor cache (about a minute), the photo features (a few minutes), then the 30 fits | 5-15 min per fit (the memory encodes about 300 past windows per batch), about 2.5-7.5 h in all |
 | `b6-report` | `cpu_short` | Starts only if `b6-train` succeeded: writes the report (§12.2) and the archive | a few minutes |
 
 The script refuses to submit when:
@@ -544,12 +544,15 @@ fold 3 seed 1 epoch 12/30: validation MAE 231.4 s; loss mse 0.0412 hinge 0.00031
 ```
 
 `hinge` is the monotonic penalty (the mean rise of rising pairs, on y/H): it should fall
-as training removes rising predictions. `bash slurm/status.sh` shows the fits as `done/30`.
+as training removes rising predictions. On the first fits, check that the validation MAE
+moves after the first epochs. On the tiny toy, 96-step memory blocks once left it stuck
+at its first value for 4 epochs; real tools complete 19-56 blocks each, so it is not
+expected here. `bash slurm/status.sh` shows the fits as `done/30`.
 
-**If `b6-train` stops** (8 h limit, node failure), run `bash slurm/omnifuser_rul.sh …`
+**If `b6-train` stops** (16 h limit, node failure), run `bash slurm/omnifuser_rul.sh …`
 again: finished fits are skipped, and a new report job is chained. If the log shows more
-than 15 minutes per fit, the 30 fits will not fit in 8 hours. Resubmitting continues the
-run.
+than 30 minutes per fit, the 30 fits will not fit in 16 hours. Resubmitting continues
+the run.
 
 ### 12.2 The report
 

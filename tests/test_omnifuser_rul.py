@@ -40,6 +40,7 @@ from rulfuse.omnifuser_rul.train import (  # noqa: E402
 
 KINDS = ["surface"]
 QUICK_PAIRS = 128  # small epochs for CPU tests
+SHORT_BLOCKS = MemorySpec(block=16)  # toy units have 82-109 points: several 16-step blocks
 
 
 def quiet(*_: object) -> None:
@@ -250,12 +251,12 @@ def test_switched_off_inputs_cannot_change_the_output_or_the_memory(toy_b6):
     for what, switch in cases.items():
         torch.manual_seed(0)
         model = OmniFuserRUL(
-            layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec(), **switch
+            layout, 1, data.IMAGE_FEATURE_WIDTH, memory=SHORT_BLOCKS, **switch
         ).eval()
         with torch.no_grad():
             assert torch.allclose(run(model, base), run(model, changed(what)), atol=1e-5), what
     torch.manual_seed(0)
-    model = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec()).eval()
+    model = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=SHORT_BLOCKS).eval()
     with torch.no_grad():
         for what in cases:
             assert not torch.allclose(run(model, base), run(model, changed(what))), what
@@ -272,8 +273,94 @@ def test_the_model_keeps_omnifusers_encoder_and_adds_the_memory(toy_b6):
     assert model.backbone.config.metadata == "none" and model.backbone.config.horizon == 1
     assert model.backbone.config.force_channels == layout.width
     assert model.head.in_features == model.backbone.config.d_model + 48
+    # the memory reads OmniFuser's two encoded streams; it has no input layer of its own
+    assert model.memory.rnn.input_size == 2 * model.backbone.config.d_model
+    assert model.memory.block == data.INPUT_STEPS and not hasattr(model, "photo_projection")
     plain = OmniFuserRUL(layout, 2, data.IMAGE_FEATURE_WIDTH)
     assert plain.head.in_features == plain.backbone.config.d_model and not hasattr(plain, "memory")
+
+
+def _memory_case(toy_b6, block=16):
+    _, store, _, features, steps, _ = toy_b6
+    inputs = _inputs(steps, features, store.unit_names[:2])
+    tensors = data.FitTensors(inputs, data.INPUT_STEPS, "cpu")
+    layout = data.Layout(steps[store.unit_names[0]].descriptors.shape[1])
+    torch.manual_seed(0)
+    model = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec(block=block))
+    return inputs, tensors, model.eval()
+
+
+def test_the_memory_reads_omnifusers_encodings_of_each_block(toy_b6):
+    """The GRU's input for block j is the mean, over the head's own window ending at the
+    block's last step, of the force and photo streams that OmniFuser.encode fuses."""
+    inputs, tensors, model = _memory_case(toy_b6)
+    backbone = model.backbone
+    unit, step = torch.tensor([0, 1]), torch.tensor([47, 63])
+    force, images, idx = tensors.windows(unit, step)
+    captured = {}
+    hooks = [
+        backbone.temporal_encoder.register_forward_hook(
+            lambda _m, _i, out: captured.__setitem__("sensor", out)
+        ),
+        backbone.image_branch.register_forward_hook(
+            lambda _m, _i, out: captured.__setitem__("photo", out)
+        ),
+    ]
+    with torch.no_grad():
+        backbone.encode(force, images, idx)
+        sensor, photo = model.encoded_streams(force, images, idx)
+    for hook in hooks:
+        hook.remove()
+    torch.testing.assert_close(sensor, captured["sensor"])
+    torch.testing.assert_close(photo, captured["photo"])
+    fed = {}
+    hook = model.memory.rnn.register_forward_hook(lambda _m, i, _o: fed.__setitem__("x", i[0]))
+    with torch.no_grad():
+        model.memory_states(*tensors.memory_inputs())
+    hook.remove()
+    block = model.memory.block
+    for u in (0, 1):
+        for j in range(inputs[u].n // block):
+            end = torch.tensor([(j + 1) * block - 1])
+            f, im, ix = tensors.windows(torch.tensor([u]), end)
+            with torch.no_grad():
+                s_, p_ = model.encoded_streams(f, im, ix)
+            expected = torch.cat([s_.mean(1), p_.mean(1)], -1)[0]
+            torch.testing.assert_close(fed["x"][u, j], expected, atol=1e-5, rtol=1e-5)
+        assert not fed["x"][u, inputs[u].n // block :].any()  # unfinished blocks: padding
+
+
+def test_the_encoded_memory_never_reads_a_later_step(toy_b6):
+    """OmniFuser mixes all steps of a window, so a block may only be encoded once complete:
+    changing any force value or photo after step t leaves the memory up to t unchanged."""
+    inputs, tensors, model = _memory_case(toy_b6)
+    with torch.no_grad():
+        base = model.memory_states(*tensors.memory_inputs())
+        for t in (20, 47, 70):
+            changed = data.FitTensors(inputs, data.INPUT_STEPS, "cpu")
+            front = data.INPUT_STEPS - 1
+            changed.force[:, front + t + 1 :] += 4.0
+            changed.index[:, front + t + 1 :] = 0  # photos after t disappear
+            after = model.memory_states(*changed.memory_inputs())
+            torch.testing.assert_close(after[:, : t + 1], base[:, : t + 1])
+            assert not torch.allclose(after[:, t + 1 :], base[:, t + 1 :])
+    assert not base[:, :15].any() and base[:, 15].abs().sum() > 0  # first block ends at 15
+
+
+def test_gradients_reach_omnifusers_encoders_through_the_memory(toy_b6):
+    _, tensors, model = _memory_case(toy_b6)
+    model.train()
+    model.memory_states(*tensors.memory_inputs()).square().sum().backward()
+    parameters = dict(model.named_parameters())
+    for name in (
+        "backbone.temporal_embedding.value.0.weight",  # OmniFuser's force encoder
+        "backbone.image_branch.encoder.projection.weight",  # its photo projection
+        "memory.rnn.weight_ih_l0",
+    ):
+        grad = parameters[name].grad
+        assert grad is not None and grad.abs().sum() > 0, name
+    fusion = parameters["backbone.fusion_layers.0.project.0.weight"].grad  # not on this path
+    assert fusion is None or not fusion.any()
 
 
 def test_modality_dropout_reads_the_matching_memory(toy_b6):
@@ -281,12 +368,12 @@ def test_modality_dropout_reads_the_matching_memory(toy_b6):
     inputs = _inputs(steps, features, store.unit_names[:1])
     tensors = data.FitTensors(inputs, data.INPUT_STEPS, "cpu")
     layout = data.Layout(steps[store.unit_names[0]].descriptors.shape[1])
-    model = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec()).eval()
+    model = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=SHORT_BLOCKS).eval()
     with torch.no_grad():
         full = model.memory_states(*tensors.memory_inputs())
         no_force = model.memory_states(*tensors.memory_inputs(), variant=DROP_FORCE)
         off = OmniFuserRUL(
-            layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec(), use_force=False
+            layout, 1, data.IMAGE_FEATURE_WIDTH, memory=SHORT_BLOCKS, use_force=False
         )
         off.load_state_dict(model.state_dict())
         assert torch.allclose(no_force, off.eval().memory_states(*tensors.memory_inputs()))
@@ -305,7 +392,15 @@ def test_select_epoch_uses_three_consecutive_values():
 @pytest.fixture(scope="module")
 def toy_fits(toy_b6):
     _, store, _, features, steps, root = toy_b6
-    spec = ArmSpec(players=("force", "surface"), epochs=8, seeds=(0,), pairs_per_epoch=QUICK_PAIRS)
+    # 16-step memory blocks: a toy tool (82-109 points) completes several; with the 96-step
+    # default most complete none (B6 plan §14, version 6)
+    spec = ArmSpec(
+        players=("force", "surface"),
+        epochs=8,
+        seeds=(0,),
+        pairs_per_epoch=2 * QUICK_PAIRS,
+        memory_block=SHORT_BLOCKS.block,
+    )
     folder = run_arm(
         store, steps, features, KINDS, spec, root / "runs", folds=[1], device="cpu", log=quiet
     )
@@ -318,9 +413,9 @@ def _best(folder, fold="fold-01", seed="seed-0"):
 
 def test_a_fit_learns_the_toy_rul_and_a_shuffled_control_does_not(toy_b6, toy_fits, tmp_path):
     """The fit ends below 0.7 × the constant predictor's MAE; the same fit on shuffled
-    targets stays above it (and at least 1.5 × the real fit). The control's margin was 0.8
-    until 2026-11-07: with the temporal terms off it scores 0.78 ×, and only the old strong
-    penalty (1.0 and 0.5) had pushed every fit, the real one too, above that line."""
+    targets stays above it (and at least 1.5 × the real fit). Measured 2026-11-08 with the
+    encoded memory: fit 0.44 ×, control 0.96 ×. (The margin was 0.8 until 2026-11-07; with
+    versions 3-5's raw-input memory the control reached 0.78 ×.)"""
     _, store, _, features, steps, root = toy_b6
     spec, folder = toy_fits
     fold = leave_one_unit_out(store.unit_names)[0]
@@ -519,7 +614,7 @@ def test_predict_unit_matches_the_training_memory(toy_b6):
     inputs = _inputs(steps, features, store.unit_names[:2])
     tensors = data.FitTensors(inputs, data.INPUT_STEPS, "cpu")
     layout = data.Layout(steps[store.unit_names[0]].descriptors.shape[1])
-    model = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=MemorySpec()).eval()
+    model = OmniFuserRUL(layout, 1, data.IMAGE_FEATURE_WIDTH, memory=SHORT_BLOCKS).eval()
     one = data.FitTensors(inputs[1:], data.INPUT_STEPS, "cpu")
     points = np.arange(inputs[1].n)
     # the memory of a unit does not depend on which other units share the tensors

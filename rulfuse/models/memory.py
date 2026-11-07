@@ -11,6 +11,10 @@ t reads the state after the last block that is **complete at t**, block j = (t +
 sees. Before the first complete block the state is zero. So the state used at step t never
 depends on a step after t (tested).
 
+``forward`` averages a unit's step inputs per block itself. ``forward_blocks`` takes one
+input per block from the caller instead (B6 since version 6: OmniFuser's encodings of each
+block, docs/OMNIFUSER_RUL_PLAN.md O8); the reading rule is the same.
+
 No normalization is applied to the block means: the step inputs are already standardized
 (on the training units), and a LayerNorm across features would cancel a rise shared by all
 of them, such as the common rise of the force descriptors with wear.
@@ -58,5 +62,20 @@ class CausalMemory(nn.Module):
         units, steps, _ = x.shape
         out, _ = self.rnn(self.blocks(x, lengths))  # (U, n_blocks, hidden)
         index = (torch.arange(steps, device=x.device) + 1) // self.block  # 0: no block yet
+        padded = torch.cat([out.new_zeros(units, 1, out.shape[-1]), out], dim=1)
+        return padded[:, index]
+
+    def forward_blocks(self, blocks: Tensor, steps: int) -> Tensor:
+        """(U, n_blocks, D) one input per block, block j covering steps j·block ..
+        (j + 1)·block − 1 (time order; blocks a unit does not complete are padding and are
+        never read) -> (U, steps, hidden): step t reads the state after block
+        (t + 1) // block − 1, zero before the first complete block."""
+        units = blocks.shape[0]
+        if blocks.shape[1] < steps // self.block:
+            raise ValueError("one input is needed per block that the steps complete")
+        index = (torch.arange(steps, device=blocks.device) + 1) // self.block
+        if blocks.shape[1] == 0:
+            return blocks.new_zeros(units, steps, self.hidden_dim)
+        out, _ = self.rnn(blocks)
         padded = torch.cat([out.new_zeros(units, 1, out.shape[-1]), out], dim=1)
         return padded[:, index]

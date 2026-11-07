@@ -1,10 +1,23 @@
-"""The OmniFuser-RUL model (docs/OMNIFUSER_RUL_PLAN.md §5; version 3).
+"""The OmniFuser-RUL model (docs/OMNIFUSER_RUL_PLAN.md §5; version 6).
 
 OmniFuser v1.1 (``OmniFuser.encode``) with the paper's dimensions, no metadata codes and
 precomputed photo features reads the 96 most recent steps. A ``CausalMemory`` (O8, D21)
-carries everything older: a GRU over the unit's whole history, in 10-step blocks, of the
-same step inputs (force vector, projected photo composite, photo flag). The head reads the
-last fused step and the memory state: ŷ/H = Linear([F_T ; m_T]).
+carries everything older: a GRU over the unit's whole history, one input per block of
+``MemorySpec.block`` steps (96 by default: one OmniFuser window), and that input is
+**OmniFuser's own encoding of the block**:
+
+* the window of 96 steps ending at the block's last step goes through OmniFuser's force
+  encoder (temporal embedding + multi-resolution extractor) and its image branch (photo
+  projection + graph attention), the same modules and weights the head's window uses;
+* each stream is averaged over the window's steps; the GRU input is [force ; photos]
+  (2 × d = 64 numbers);
+* step t reads the state after the last block complete at t, so it never depends on a step
+  after t. OmniFuser mixes all 96 steps of a window, so a block is encoded only once all
+  its steps exist. With 96-step blocks the windows tile the history exactly once.
+
+Gradients reach the encoders through the memory as well as through the head, and training
+and inference compute the memory the same way (``memory_states``). The head reads the last
+fused step and the memory state: ŷ/H = Linear([F_T ; m_T]).
 
 Inputs are switched off at the input level, in the window and in the memory alike, so
 every arm keeps the same architecture and usage stays available when force or photos are
@@ -39,9 +52,8 @@ NO_DROP, DROP_FORCE, DROP_PHOTO = 0, 1, 2
 @dataclass(frozen=True)
 class MemorySpec:
     hidden: int = 64
-    block: int = 10  # steps per memory block (10 s at 1 s steps)
+    block: int = INPUT_STEPS  # steps per memory block: one OmniFuser window (96 s at 1 s)
     cell: str = "gru"
-    photo_dim: int = 32  # the memory's own projection of the photo composites
 
 
 class OmniFuserRUL(nn.Module):
@@ -61,6 +73,7 @@ class OmniFuserRUL(nn.Module):
         if not 0.0 <= modality_dropout < 1.0:
             raise ValueError("modality_dropout must be in [0, 1)")
         self.layout = layout
+        self.input_steps = input_steps
         self.use_force, self.use_photos, self.use_usage = use_force, use_photos, use_usage
         self.modality_dropout = modality_dropout
         config = ModelConfig(
@@ -88,10 +101,7 @@ class OmniFuserRUL(nn.Module):
         self.memory_spec = memory
         head_width = config.d_model
         if memory is not None:
-            self.photo_projection = nn.Linear(max(views, 1) * view_width, memory.photo_dim)
-            self.memory = CausalMemory(
-                layout.width + memory.photo_dim + 1, memory.hidden, memory.block, memory.cell
-            )
+            self.memory = CausalMemory(2 * config.d_model, memory.hidden, memory.block, memory.cell)
             head_width += memory.hidden
         self.head = nn.Linear(head_width, 1)
 
@@ -120,6 +130,17 @@ class OmniFuserRUL(nn.Module):
 
     # ------------------------------------------------------------------ memory
 
+    def encoded_streams(
+        self, force: Tensor, images: Tensor, image_indices: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        """(B, T, width), (B, m, F), (B, T) -> OmniFuser's encoded force series and encoded
+        photos, each (B, T, d): the two streams ``OmniFuser.encode`` fuses (RevIN, metadata
+        and OmniFuser's own modality dropout are off here, so these are exactly its inputs
+        to the cross-modal fusion)."""
+        backbone = self.backbone
+        sensor = backbone.temporal_encoder(backbone.temporal_embedding(force))
+        return sensor, backbone.image_branch(images, image_indices)
+
     def memory_states(
         self,
         force: Tensor,
@@ -129,24 +150,43 @@ class OmniFuserRUL(nn.Module):
         variant: int = NO_DROP,
     ) -> Tensor:
         """(U, n, width), (U, m, F), (U, n), (U,) -> (U, n, hidden) memory at every step of
-        each unit. ``variant`` DROP_FORCE / DROP_PHOTO: the memory of the same unit without
-        force or without photos (for modality dropout)."""
-        if self.memory_spec is None:
+        each unit (inputs in time order, padded at the end). Block j of a unit is the window
+        of ``input_steps`` steps ending at its last step, (j + 1)·block − 1, padded at the
+        front with empty steps as the head's windows are; its GRU input is the mean over the
+        window of OmniFuser's encoded force and encoded photos. Only blocks a unit completes
+        are encoded. ``variant`` DROP_FORCE / DROP_PHOTO: the memory of the same unit
+        without force or without photos (for modality dropout)."""
+        spec = self.memory_spec
+        if spec is None:
             raise RuntimeError("this model has no memory")
+        units, steps, width = force.shape
+        block, window = spec.block, self.input_steps
+        n_blocks = steps // block
         force = self._switch_force(force)
         if variant == DROP_FORCE:
             force[..., : self.layout.descriptors + 1] = 0.0
-        photos_on = self.use_photos and variant != DROP_PHOTO
-        if photos_on:
-            projected = self.photo_projection(composites)  # (U, m, photo_dim)
-            photo = torch.gather(
-                projected, 1, comp_index.unsqueeze(-1).expand(-1, -1, projected.shape[-1])
-            )
-            flag = (comp_index > 0).to(force.dtype).unsqueeze(-1)
-        else:
-            photo = force.new_zeros(*force.shape[:2], self.memory_spec.photo_dim)
-            flag = force.new_zeros(*force.shape[:2], 1)
-        return self.memory(torch.cat([force, photo, flag], dim=-1), lengths)
+        if not (self.use_photos and variant != DROP_PHOTO):
+            composites = torch.zeros_like(composites)
+            comp_index = torch.zeros_like(comp_index)
+        front = window - 1
+        force = torch.cat([force.new_zeros(units, front, width), force], dim=1)
+        comp_index = torch.cat([comp_index.new_zeros(units, front), comp_index], dim=1)
+        ends = torch.arange(n_blocks, device=force.device) * block + (block - 1)
+        positions = ends[:, None] + torch.arange(window, device=force.device)[None]
+        d = self.backbone.config.d_model
+        encoded = []
+        for u in range(units):
+            done = int((ends < lengths[u]).sum())  # blocks this unit completes
+            rows = force.new_zeros(n_blocks, 2 * d)
+            if done:
+                sensor, photo = self.encoded_streams(
+                    force[u, positions[:done]],
+                    composites[u : u + 1].expand(done, -1, -1),
+                    comp_index[u, positions[:done]],
+                )
+                rows = torch.cat([torch.cat([sensor.mean(1), photo.mean(1)], -1), rows[done:]])
+            encoded.append(rows)
+        return self.memory.forward_blocks(torch.stack(encoded), steps)
 
     # ------------------------------------------------------------------ forward
 

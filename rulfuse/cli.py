@@ -354,7 +354,7 @@ def _add_omnifuser_options(p: argparse.ArgumentParser, players: bool = True) -> 
     )
     p.add_argument("--no-memory", action="store_true", help="no GRU memory (ablation, O8)")
     p.add_argument("--memory-hidden", type=int, default=64)
-    p.add_argument("--memory-block", type=int, default=10, help="steps per memory block")
+    p.add_argument("--memory-block", type=int, default=96, help="steps per memory block (O8: 96)")
     p.add_argument(
         "--mono-weight", type=float, default=1.0 / 15.0, help="monotonic hinge (O9; 1/15)"
     )

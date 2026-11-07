@@ -73,7 +73,7 @@ class ArmSpec:
     input_steps: int = INPUT_STEPS
     memory: bool = True  # O8
     memory_hidden: int = 64
-    memory_block: int = 10
+    memory_block: int = INPUT_STEPS  # O8: one encoded OmniFuser window per block
     mono_weight: float = 1.0 / 15.0  # O9: relu(ŷ_later − ŷ_earlier); pulls ≤ about H/15
     slope_weight: float = 0.05  # O9: slope consistency below the cap
     max_lag: int = 200  # steps

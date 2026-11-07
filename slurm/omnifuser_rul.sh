@@ -1,8 +1,9 @@
 #!/bin/bash
-# Baseline B6, OmniFuser-RUL: the single full run (docs/OMNIFUSER_RUL_PLAN.md version 5;
+# Baseline B6, OmniFuser-RUL: the single full run (docs/OMNIFUSER_RUL_PLAN.md version 6;
 # docs/RUCHE_RUNBOOK.md §12.1). One configuration, no comparison of settings:
 #   players = force + the photo types Stage 3 admitted, with usage;
-#   GRU memory on; loss = point-weighted MSE + 1/15 x monotonic penalty + 0.05 x slope term
+#   GRU memory over OmniFuser's encodings of each 96-step block;
+#   loss = point-weighted MSE + 1/15 x monotonic penalty + 0.05 x slope term
 #   (both move only the earlier prediction of a pair); the report has both inference modes;
 #   10 folds x 3 seeds = 30 fits, in one GPU job.
 # It submits that job and, chained after it, the report job (slurm/omnifuser_results.sh),
@@ -57,7 +58,7 @@ print(f"photo types {players} admitted by {os.path.basename(reports[-1])}")
 PY
 fi
 
-train=$(sbatch --parsable --job-name=b6-train --time=08:00:00 slurm/job.sbatch \
+train=$(sbatch --parsable --job-name=b6-train --time=16:00:00 slurm/job.sbatch \
     python -m rulfuse.cli omnifuser-arm --players "${players[@]}" --feature-device cuda \
     ${extra[@]+"${extra[@]}"})
 train=${train%%;*}

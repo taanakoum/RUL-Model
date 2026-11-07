@@ -12,7 +12,7 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
 | S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
 | S3 Core/adapter refactor, features, feature check | **Code done** (2026-11-05); **Ruche jobs J0-J3 waiting for you** | Refactored store identical to Stage 2's; 111 tests (109 pass, 2 need the weights: they run in J0); ruff and pyright clean; [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) |
-| B6 OmniFuser-RUL (D20) | **Version 5 ready** (2026-11-07): one fixed setting (GRU memory; monotonic penalty moving only the earlier prediction), one full run of 10 folds × 3 seeds, then a report with per-tool test results in two inference modes, compared; **waiting for Ruche** after Stage 3's photo decision | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) O9, O12, O13, §7, §14; runbook §12.1-§12.2 |
+| B6 OmniFuser-RUL (D20) | **Version 6 ready** (2026-11-08): one fixed setting (GRU memory over OmniFuser's encodings of each 96-step block; monotonic penalty moving only the earlier prediction), one full run of 10 folds × 3 seeds, then a report with per-tool test results in two inference modes, compared; **waiting for Ruche** after Stage 3's photo decision | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) O9, O12, O13, §7, §14; runbook §12.1-§12.2 |
 | S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
@@ -917,3 +917,70 @@ commit "B6 version 5: test fixes from the toy measurements, docs":
 - `rulfuse/inference.py`: the flat-prediction note;
 - `docs/OMNIFUSER_RUL_PLAN.md` (version-5 notes, V-7, V-17, the flat-prediction limit),
   `docs/RUCHE_RUNBOOK.md` (test count), `PROJECT_LOG.md`.
+
+## B6 version 6: the GRU memory reads OmniFuser's encodings (2026-11-08)
+
+**Your request.** The GRU should take the encoded time series and encoded images, in
+training and inference. Before, it read the raw step inputs: force descriptors, its own
+projection of the photo features, and a photo flag, in 10-step means.
+
+**Design** (B6 plan O8, §5):
+
+- **Input.** One GRU input per block of 96 steps (one OmniFuser window): OmniFuser's encoded
+  force series and encoded photos for that block, from the same encoders and weights as the
+  head's window. Each is averaged over the block, giving 64 numbers.
+- **Causality.** OmniFuser mixes all steps inside its window, so a block is encoded only
+  when it is complete. Step t reads the memory of the blocks complete at t, and the head's
+  96-step window covers the newest steps.
+- **No fusion on the past.** The fusion runs only on the current window, in the head.
+- **Training and inference.** Gradients reach the encoders through the memory. Training
+  and inference use the same `memory_states`.
+
+**Why 96-step blocks and not 10.** 10-step blocks would need about 2,900 encoded windows per
+batch instead of about 300, too slow for the run. 96-step blocks tile the history exactly
+once.
+
+**Changes:**
+
+- `OmniFuserRUL.encoded_streams` and a new `memory_states`;
+- `CausalMemory.forward_blocks`, shared; the block-mean `forward` is unchanged for RUL-Fuse;
+- block default 96 in `MemorySpec`, `ArmSpec` and `--memory-block`; the memory's own photo
+  projection is removed;
+- `b6-train` asks for 16 h (was 8);
+- docs: B6 plan version 6 (O8, §5, §10, §14), project plan D21, its job table and Appendix
+  A, runbook §12.1;
+- tests (below).
+
+**Verification:**
+
+- **The input is OmniFuser's encoding.** `encoded_streams` equals the two streams
+  `OmniFuser.encode` fuses (hooks). Each block's GRU input equals their mean over the head's
+  own window ending at the block's last step.
+- **Causal.** Changes after step t never alter the memory up to t (three values of t).
+- **Gradients.** They reach the force embedding, the photo projection and the GRU through
+  the memory; the fusion is not on that path.
+- **Existing checks.** Input switches, modality dropout and per-tool independence still
+  hold, now tested with 16-step blocks so the short toy tools complete several blocks.
+- **Found by the suite: the toy learning test.** With 96-step blocks the short toy tools
+  (82-109 points) barely complete a block. The toy fit stalled at 280.5 s (no memory:
+  160.7 s; 16-step blocks: 128.5 s). The toy fit now uses 16-step blocks and 256 pairs per
+  epoch: fit 80.3 s, 0.44 × the constant predictor. Its shuffled control is 0.96 ×; the old
+  raw-input memory had given it a usage shortcut (0.78 ×). Real tools complete 19-56 blocks
+  each, so this does not carry over. Check the first Ruche fits for a validation MAE stuck
+  at its first value.
+- **Real data, laptop CPU.** The 2-epoch smoke fit (force + tool + chip, fold 1, 256 pairs
+  per epoch) runs end to end in 135 s, against 38 s with version 3's memory. Expected on
+  Ruche: 5-15 minutes per fit, 2.5-7.5 GPU-hours for the run.
+- **Suite.** 167 tests: 165 pass, 2 skip (the Mantis and DINOv2 checkpoint
+  tests, which run in J0); ruff and pyright are clean.
+
+**Suggested commit (you commit):** "B6 version 6: the GRU memory reads OmniFuser's
+encodings":
+
+- `rulfuse/omnifuser_rul/model.py`, `rulfuse/models/memory.py`,
+  `rulfuse/omnifuser_rul/train.py`, `rulfuse/omnifuser_rul/run_report.py`,
+  `rulfuse/cli.py`;
+- `tests/test_omnifuser_rul.py`;
+- `slurm/omnifuser_rul.sh`;
+- `docs/OMNIFUSER_RUL_PLAN.md`, `docs/RUCHE_RUNBOOK.md`, `PROJECT_PLAN.md`,
+  `PROJECT_LOG.md`.

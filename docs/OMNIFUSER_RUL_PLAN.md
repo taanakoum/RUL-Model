@@ -1,5 +1,10 @@
 # OmniFuser-RUL: an OmniFuser baseline for the RUL task
 
+**Version 6, 2026-11-08: the GRU memory reads OmniFuser's own encodings.** For each past
+block of 96 steps, the GRU takes OmniFuser's encoded force series and encoded photos,
+averaged over the block. Before, it read the raw step inputs (O8, §5). Training and
+inference compute it the same way. §14 records what changed.
+
 **Version 5, 2026-11-07: the penalty can no longer drag predictions down, and the report
 compares two inference modes.**
 
@@ -71,7 +76,7 @@ independent architecture:
 | O5 | B6's configuration, fixed now | Force + **every photo type admitted by the Stage-3 leakage probe** (the same inputs as RUL-Fuse) + usage. The secondary row B6-FT (force + tool photo) is OmniFuser's original pairing | Review (V7) |
 | O6 | Architecture values | OmniFuser `v1.0` defaults: d = 32, 4 RTD blocks, 4 GAT layers × 4 heads, k = 4, 2 C2F rounds; input of 96 steps; dropout 0.1; Adam, learning rate 1e-4, batch 32, 30 epochs. No search | Minimal change |
 | O7 | Time step | **1 s segments** (OmniFuser's own pooled step): B6 has its own store cut at S = 1 s. A fold trains on about 29,000 prediction points instead of about 3,000 at 10 s, and 96 steps are 96 s, about one pass. **Scored and selected on the 10 s grid** (D7): a 1 s store contains every 10 s point with the same τ, RUL and window, so B6, RUL-Fuse and B0-B5 are compared on the same 3,747 points | You (2026-11-06): more training examples; checked in §14 |
-| O8 | Memory | A **GRU over the tool's whole history** (`rulfuse.models.memory.CausalMemory`, shared with RUL-Fuse, D21). Its inputs are every step's force vector, a projection of the photo composite and a photo flag, averaged in 10-step blocks. Step t reads the state after the last complete block (causal); the head reads [last fused step ; memory state]. Hidden size 64 | You (2026-11-06): every new segment uses the information of all previous ones |
+| O8 | Memory | A **GRU over the tool's whole history** (`rulfuse.models.memory.CausalMemory`, shared with RUL-Fuse, D21). **Its input for each block of 96 steps is OmniFuser's encoding of that block** (version 6): the block's window goes through OmniFuser's force encoder and its image branch, the same modules and weights as the head's window, and each stream is averaged over the window: [encoded force ; encoded photos], 64 numbers. Step t reads the state after the last block complete at t (causal); the head reads [last fused step ; memory state]. Hidden size 64. Gradients reach the encoders through both paths. (Versions 3-5: block means of the raw step inputs, in 10-step blocks) | You (2026-11-06): every new segment uses the information of all previous ones. You (2026-11-08): the GRU takes the encoded time series and encoded images, in training and inference |
 | O9 | Temporal loss | Training samples are **pairs** of points of one tool, the earlier at lag 1 (the previous segment) half the time and up to 200 steps otherwise. The loss adds **1/15 × relu(ŷ_later − ŷ_earlier)** (a predicted RUL never rises) and **0.05 × ((ŷ_earlier − ŷ_later) − Δτ)²** where the earlier target is below the cap (true RUL falls by exactly Δτ), all on y/H (`rulfuse.models.losses`, D22). **Both terms move only the earlier prediction; the later one is the fixed reference** (version 5) | You (2026-11-06), plus the slope term (a stronger statement of the same fact, already in RUL-Fuse's plan). Version 5 (2026-11-07), after your question: with weight 1.0 on both predictions, an earlier prediction the model cannot correct dragged later ones down to it (§14) |
 | O10 | Epochs | **2,048 pairs (4,096 windows) per epoch**, 30 epochs: a fixed training budget, close to version 2's, despite 10× more points | Cost (§10) |
 | O11 | Ablations | Two extra arms with all players: **without the memory** and **without the temporal terms** | Measures what O8 and O9 add. **Not run (O12)** |
@@ -199,12 +204,26 @@ longer measure what they add.
    - The switches act on the memory's inputs in the same way. Modality dropout
      draws one code per sample (force missing, no photo yet), and the sample
      reads the memory computed with the same input missing.
-5. **Memory (version 3, O8).** `rulfuse.models.memory.CausalMemory`: a GRU, hidden
-   64, over 10-step block means of [force vector ; Linear(views × 1280 → 32) of the
-   photo composite ; photo flag]. It is causal by construction: step t reads the
-   state after the last block complete at t; before it, zeros. There is no
-   normalization of the block means, because a LayerNorm across features would
-   cancel a rise shared by all descriptors (found by a test, §14).
+5. **Memory (O8; version 6).** `rulfuse.models.memory.CausalMemory` (`forward_blocks`):
+   a GRU, hidden 64, with one input per block of 96 steps (one OmniFuser window).
+   - **Input:** the block's window goes through OmniFuser's force encoder (temporal
+     embedding and multi-resolution extractor) and its image branch (photo
+     projection and graph attention), the modules and weights the head's window
+     uses (`OmniFuserRUL.encoded_streams`). Each stream is averaged over the
+     window's 96 steps, and the GRU reads [encoded force ; encoded photos]: 2 × 32
+     numbers. The cross-modal fusion is not run on past blocks: the head already
+     fuses the current window, and fusion is the costliest part.
+   - **Causal by construction.** OmniFuser mixes all 96 steps of a window, so a
+     block is encoded only once all its steps exist. Step t reads the state after
+     the last block complete at t; before the first one (step 95), zeros.
+   - **Coverage.** The 96-step blocks tile the history exactly once. The head's
+     window covers the newest steps, so nothing falls between the two.
+   - **One computation.** Gradients reach the encoders through the memory as well
+     as the head, and `memory_states` is the same in training and inference.
+   - **Versions 3-5.** The GRU read 10-step block means of [force vector ;
+     Linear(views × 1280 → 32) of the photo composite ; photo flag]. A LayerNorm on
+     the block means was found to cancel a rise shared by all descriptors and was
+     removed (§14).
 6. **Temporal loss (version 3, O9).** `rulfuse.models.losses`: `monotonic_hinge`
    and `slope_consistency` on each training pair.
 
@@ -450,7 +469,7 @@ way, the ranking is a property of the data, not of one model.
 | V-4 | Targets and weights | Each sample's y equals the store's `y_s`; window flags equal; each tool's weights sum to 1 |
 | V-5 | Baselines on the same points | B0-B2 reproduce 412, 513 and 468 s with this module's sample set |
 | V-6 | Single-stream switch | With `streams="force"`, the output is unchanged when the photos change, and the other way round; `none` ignores both |
-| V-7 | Learns | On the toy adapter, the window MAE ends below 0.7 × the constant predictor's; a shuffled-target control stays above 0.7 × and above 1.5 × the real fit (version 5; the margin was 0.8, see §14) |
+| V-7 | Learns | On the toy adapter, the window MAE ends below 0.7 × the constant predictor's; a shuffled-target control stays above 0.7 × and above 1.5 × the real fit (version 5; the margin was 0.8, see §14). Since version 6 the toy fit uses 16-step memory blocks and 256 pairs per epoch: fit 0.44 ×, control 0.96 × |
 | V-8 | Determinism and resume | The same seed gives the same predictions on the CPU; an interrupted fit resumes to the same result |
 | V-9 | Test seal | `aggregate` refuses test scores before the freeze without `--after-freeze` |
 | V-10 | Transfer contract | The core imports nothing from `omnifuser_rul`; photo kinds come from the store, never hard-coded (plan P22) |
@@ -479,8 +498,13 @@ way, the ranking is a property of the data, not of one model.
 - One fit (version 3) trains on 30 × 4,096 windows, plus the memory over
   the 8 training tools for each of its 3,840 batches. Expected 3-6 minutes on an
   A100 with cached features; the pilot measures it.
-- **Version 4 (O12): one run of 30 fits, about 1.5-3 GPU-hours, in one job, followed by a
-  CPU report job.** The rest of this list was the version-3 study's cost:
+- **Version 6:** the memory encodes each training tool's complete 96-step blocks in
+  every batch, about 300 extra windows next to the batch's 32. A laptop-CPU smoke fit
+  took 135 s against 38 s with version 3's memory. Expected 5-15 minutes per fit on an
+  A100, 2.5-7.5 GPU-hours for the 30 fits; the job asks for 16 hours.
+- **Version 4 (O12): one run of 30 fits, about 1.5-3 GPU-hours (version 6: 2.5-7.5),
+  in one job, followed by a CPU report job.** The rest of this list was the version-3
+  study's cost:
 - 13 arms × 10 folds × 3 seeds = 390 fits, about 20-40 GPU-hours. The 30 fits of
   an arm form one job, so the study is 13 jobs of at most 8 hours each.
 - If the pilot's fit takes more than 6 minutes, halve `--pairs-per-epoch` (1,024)
@@ -812,3 +836,68 @@ inference instead.
 - RMSE 88.8 → 79.4 s; rising steps 0.454 → 0.365.
 - Whole-life MAE 73.1 → 97.5 s: the flat-prediction cost described in §7.
 - The figures were rendered and inspected.
+
+### Version 6 (2026-11-08): the memory reads OmniFuser's encodings
+
+**Your request.** The GRU should take the encoded time series and the encoded images, in
+training and in inference. In versions 3-5 it read the raw step inputs: the force
+descriptors, a separate projection of the photo features, and a photo flag.
+
+**Design (O8, §5):**
+
+- **Input.** One input per block of 96 steps: OmniFuser's encoded force series and encoded
+  photos for that block, each averaged over the block's 96 steps.
+- **Causality.** OmniFuser mixes all steps of its window (the multi-resolution extractor,
+  graph attention over the photos, attention in the fusion), so its per-step outputs cannot
+  be read step by step. A block is encoded only once it is complete.
+- **Coverage and cost.** 96-step blocks tile the history exactly once. 10-step blocks would
+  have meant about 2,900 encoded windows per batch instead of about 300, likely more than a
+  day of A100 time for the run.
+- **No fusion on the past.** The fusion is not run on past blocks: the head fuses the
+  current window, and fusion is the costliest part.
+- **One computation.** The same code serves training and inference, and gradients reach the
+  encoders through the memory.
+
+**What changed:**
+
+| Part | Version 6 |
+|---|---|
+| Model | `OmniFuserRUL.encoded_streams` (OmniFuser's force encoder and image branch on a window); `memory_states` encodes each complete block and feeds `CausalMemory.forward_blocks`. The memory's own photo projection is removed |
+| Shared memory | `CausalMemory.forward_blocks`: one input per block, the same reading rule as before (`forward`, the block means used by RUL-Fuse, is unchanged) |
+| Settings | `MemorySpec.block`, `ArmSpec.memory_block` and `--memory-block` default to 96 (was 10). The settings signature changes; no fit existed |
+| Ruche | `b6-train` asks for 16 hours (was 8): about 5-15 minutes per fit expected |
+
+**Verification:**
+
+- **The input is OmniFuser's encoding.** `encoded_streams` returns exactly the two streams
+  that `OmniFuser.encode` fuses (checked with hooks). The GRU's input for each block equals
+  the mean of those streams over the head's own window ending at the block's last step;
+  blocks a tool has not completed are padding.
+- **Causal.** Changing any force value or photo after step t leaves the memory up to t
+  unchanged, at three values of t. The first state appears at the first block's last step.
+- **Gradients.** They reach the force embedding, the photo projection and the GRU through
+  the memory; the fusion is not on that path.
+- **Unchanged checks.** Switched-off inputs reach neither the output nor the memory;
+  modality dropout reads the matching memory; a tool's memory does not depend on the other
+  tools in the tensors. These tests now use 16-step blocks (each still a 96-step encoded
+  window), because the toy tools are only 82-109 points long.
+- **Real data, laptop CPU.** A 2-epoch smoke fit of force + tool + chip on fold 1 (256
+  pairs per epoch) runs, trains on 30,103 points, and writes the validation and test
+  predictions: 135 s against 38 s in version 3.
+- **Toy learning test (V-7), found by the suite.** The toy tools are only 82-109 points
+  long, so with 96-step blocks most of them complete none. Validation tool U2 never does,
+  and two training tools get memory only at their last ~12 points, where it flags the end
+  of life. After 8 epochs of 128 pairs:
+
+  | Memory | Validation MAE |
+  |---|---|
+  | None | 160.7 s |
+  | 96-step blocks | 280.5 s (stuck at 335 s for 4 epochs) |
+  | 16-step blocks | 128.5 s |
+
+  The test passed before because versions 3-5's raw-input memory gave the toy an easy usage
+  signal. The toy fit now uses 16-step blocks and 256 pairs per epoch (fit 80.3 s, 0.44 ×
+  the constant predictor). Its shuffled control now really collapses: 175.2 s, 0.96 ×, where
+  the raw-input memory had given it a usage shortcut (0.78 ×). Real tools are 1,800-5,400
+  points long, 19-56 complete blocks each, so this toy effect does not carry over. The
+  first fits' logs should still be checked for a validation MAE stuck at its first value.

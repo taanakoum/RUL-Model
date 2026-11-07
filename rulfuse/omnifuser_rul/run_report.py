@@ -323,7 +323,8 @@ def _run_lines(res: dict) -> list[str]:
         "## The run",
         "",
         f"- **Configuration:** players {', '.join(spec['players'])} and usage; GRU memory "
-        f"(hidden {spec['memory_hidden']}, blocks of {spec['memory_block']} steps); loss = "
+        f"(hidden {spec['memory_hidden']}) over OmniFuser's encoded force and photos of each "
+        f"complete {spec['memory_block']}-step block; loss = "
         f"point-weighted MSE + {_weight(spec['mono_weight'])} × monotonic penalty (a "
         f"predicted RUL that rises) + {_weight(spec['slope_weight'])} × slope consistency, "
         "both moving only the earlier prediction of a pair; "
