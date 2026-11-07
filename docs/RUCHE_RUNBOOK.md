@@ -505,7 +505,8 @@ photo types are admitted (J3), and nothing from Stages 4-9.
 | Inputs | Force (7 level descriptors × 4 channels, a signal flag) + every photo type J3 admits (frozen EfficientNet-B0 features) + usage (operating time, seconds into the recording) |
 | Steps | 1 s segments, OmniFuser's own step; windows of 96 steps; scored on the project's 10 s points |
 | Model | OmniFuser v1.1's encoder (d = 32, C2F fusion) + a **GRU** memory of the whole history (hidden 64, 10-step blocks) + a linear RUL head |
-| Loss | Point-weighted MSE **+ 1.0 × monotonic penalty** (a predicted RUL higher than an earlier one of the same tool) **+ 0.5 × slope consistency** (below the cap, RUL falls by exactly the elapsed time) |
+| Loss | Point-weighted MSE **+ 1/15 × monotonic penalty** (a predicted RUL higher than an earlier one of the same tool) **+ 0.05 × slope consistency** (below the cap, RUL falls by exactly the elapsed time). Both terms move only the earlier prediction of a pair, so a wrong early prediction never drags later ones down |
+| Inference | Two modes from the same fits: **current** (each prediction as the model makes it; the primary result) and **context** (the tool's earlier predictions, aged by the time since, blended with the new one; time constant 120 s). The report compares them |
 | Training | Adam, learning rate 1e-4, 30 epochs of 2,048 pairs, gradients clipped at 1; epoch chosen on each fold's validation tool |
 | Folds and seeds | 10 folds (each tool the test tool once) × 3 seeds = 30 fits; predictions are the mean of the seeds |
 
@@ -542,8 +543,8 @@ fold 3 seed 1 epoch 12/30: validation MAE 231.4 s; loss mse 0.0412 hinge 0.00031
 [omnifuser-rul] epoch 17 kept; 214 s
 ```
 
-`hinge` is the monotonic penalty: it should fall towards zero as training removes rising
-predictions. `bash slurm/status.sh` shows the fits as `done/30`.
+`hinge` is the monotonic penalty (the mean rise of rising pairs, on y/H): it should fall
+as training removes rising predictions. `bash slurm/status.sh` shows the fits as `done/30`.
 
 **If `b6-train` stops** (8 h limit, node failure), run `bash slurm/omnifuser_rul.sh …`
 again: finished fits are skipped, and a new report job is chained. If the log shows more
@@ -557,11 +558,12 @@ run.
 
 | File | Content |
 |---|---|
-| `REPORT.md` | The run (settings, fits, time per fit, selected epochs), the test results, the paired comparison with B2, per-tool table, error by RUL range, validation results |
+| `REPORT.md` | The run (settings, fits, time per fit, selected epochs), the test results, the paired comparison with B2, per-tool table, error by RUL range, **the two inference modes compared** (test and validation), validation results |
 | `run_summary.json` | Every number of the report |
-| `test_per_unit.csv`, `validation_per_unit.csv` | One row per tool: window MAE, RMSE, bias, whole-life MAE, late and early rates, asymmetric score, share within ±20 %, rising steps, each seed's MAE, and B0, B1, B2 on the same points |
-| `error_by_bin.csv`, `test_trajectories.csv`, `curves.csv` | MAE by true-RUL range; true and predicted RUL of each test tool over its life; every epoch's validation MAE |
-| `figures/` | `rul_trajectories.png` (true RUL, B6 with its seed range, and B2, per test tool), `window_mae_per_tool.png`, `error_by_rul.png` |
+| `test_per_unit.csv`, `validation_per_unit.csv` | One row per tool and inference mode (`mode` column): window MAE, RMSE, bias, whole-life MAE, late and early rates, asymmetric score, share within ±20 %, rising steps, each seed's MAE, and B0, B1, B2 on the same points |
+| `mode_comparison.csv` | One row per tool and role: window MAE in each mode, the gain (current − context; positive = the context mode is better), the bias and rising steps in each mode |
+| `error_by_bin.csv`, `test_trajectories.csv`, `curves.csv` | MAE by true-RUL range (B6, B6 context, B2); true and predicted RUL of each test tool over its life, in both modes; every epoch's validation MAE |
+| `figures/` | `rul_trajectories.png` (true RUL, both modes with the seed range, and B2, per test tool), `window_mae_per_tool.png`, `error_by_rul.png`, each with both modes |
 
 **What the test results report.** Each of the 10 tools is the test tool of one fold, so
 every tool gets one result. Each is scored on the project's 10 s points with RUL ≤ 1,500 s,
@@ -576,6 +578,7 @@ the same points as RUL-Fuse and baselines B0-B2.
 | Rising steps | Share of consecutive 1 s steps where the predicted RUL rises: what the monotonic penalty pushes down |
 | Against B2 | Mean MAE gain over the usage rule B2 (467.8 s), its 95 % interval, tools improved, and a one-sided paired Wilcoxon test |
 | Seed sd | How much the 3 seeds disagree on each tool |
+| Inference modes | Each metric in both modes, context − current with its 95 % interval, the tools where each mode wins, and a two-sided Wilcoxon test. **Verdict rule, fixed in advance:** the context mode is better if it lowers the mean window MAE by at least 10 s and the interval of that gain lies above 0; the current mode under the mirror condition; otherwise neither. The validation comparison is fair (the time constant was fixed in advance); the test comparison follows the seal |
 
 **When the test results appear.** Before the design freeze (2026-12-01, D15) the report
 contains the run and the validation results, and says the test results are sealed. From

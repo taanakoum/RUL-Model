@@ -67,9 +67,15 @@ def test_temporal_losses():
     hinge = monotonic_hinge(earlier, later)
     assert float(hinge.detach()) == pytest.approx(0.1 / 3)  # only the rising pair counts
     hinge.backward()
-    assert later.grad is not None and earlier.grad is not None
-    assert later.grad[2] > 0 and earlier.grad[2] < 0 and later.grad[0] == 0  # pushes it down
+    assert later.grad is None  # the later prediction is the reference: never moved
+    assert earlier.grad is not None and earlier.grad[2] < 0  # the earlier one is lifted
+    assert earlier.grad[0] == 0 and earlier.grad[1] == 0  # falling and flat pairs: no push
     elapsed = torch.tensor([0.1, 0.0, 0.2])
+    slope = slope_consistency(earlier, later, elapsed)
+    earlier.grad = None
+    slope.backward()
+    assert later.grad is None and earlier.grad is not None
+    assert earlier.grad[2] < 0  # 0.5 → 0.6 should have fallen by 0.2: lift the earlier one
     assert float(slope_consistency(earlier.detach(), later.detach(), elapsed)) == pytest.approx(
         (0 + 0 + 0.3**2) / 3
     )

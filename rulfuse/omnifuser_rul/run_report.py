@@ -5,12 +5,19 @@ temporal loss on), 10 folds × 3 seeds. ``write_run_report`` reads the run's fit
 ``<runs root>/<dataset>-<store>/<arm>/report/``:
 
 * ``REPORT.md``: the run, the test results (each tool once, as the test tool of its fold),
-  the paired comparison with B2, the error by RUL range, the validation results;
+  the paired comparison with B2, the error by RUL range, the two inference modes compared,
+  the validation results;
 * ``run_summary.json``: every number of the report;
-* ``test_per_unit.csv``, ``validation_per_unit.csv``, ``error_by_bin.csv``,
-  ``test_trajectories.csv``, ``curves.csv``;
+* ``test_per_unit.csv``, ``validation_per_unit.csv`` (one row per tool and mode),
+  ``mode_comparison.csv``, ``error_by_bin.csv``, ``test_trajectories.csv``, ``curves.csv``;
 * ``figures/``: the RUL trajectories of the test tools, the per-tool errors and the error
-  by RUL range (when matplotlib is installed).
+  by RUL range, each with both inference modes (when matplotlib is installed).
+
+Inference modes (D23, ``rulfuse.inference``): ``current`` (each prediction as the model
+makes it; the primary result, fixed before any result) and ``context`` (the model's
+earlier predictions of the same tool, aged by the operating time since, blended with the
+new one). ``compare_modes`` pairs them over the same tools and states which is better by a
+rule fixed in advance (``MODE_RULE``).
 
 Everything is scored on the evaluation grid's window points (the project's 10 s points with
 RUL ≤ H), the same points as RUL-Fuse and B0-B2, with each point predicted by the mean of
@@ -31,6 +38,7 @@ from rulfuse import metrics as M
 from rulfuse.baselines import b0, b1, b2, b2_interval
 from rulfuse.core.folds import Fold, leave_one_unit_out
 from rulfuse.core.store import SegmentStore
+from rulfuse.inference import CAP_MARGIN_FRACTION, CONTEXT_TIME_S, INFERENCE_MODES
 from rulfuse.omnifuser_rul import aggregate
 from rulfuse.omnifuser_rul.report import _curve_rows, _write_csv, arm_progress
 from rulfuse.omnifuser_rul.train import ArmSpec, arm_dir
@@ -49,6 +57,31 @@ KEYS = (
     "increase_rate",
     "mean_increase_s",
 )
+
+
+COMPARE_KEYS = (
+    "window_mae",
+    "window_rmse",
+    "window_bias",
+    "whole_life_mae",
+    "late_rate",
+    "early_rate",
+    "phm_score",
+    "relative_accuracy",
+    "increase_rate",
+)
+MODE_RULE = (
+    "The context mode is better if it lowers the mean window MAE over the tools by at least "
+    f"{aggregate.MIN_GAIN_S:g} s (H/150, the project's smallest meaningful gain, PROJECT_PLAN.md "
+    "§4.4) and the 95 % bootstrap interval of that gain lies above 0; the current mode is "
+    "better under the mirror condition; otherwise neither is clearly better. The two-sided "
+    "Wilcoxon test over the tools is reported alongside."
+)
+VERDICTS = {
+    "context": "the context mode is better",
+    "current": "the current mode is better",
+    "neither": "neither mode is clearly better",
+}
 
 
 def test_open(unseal: bool, today: date | None = None) -> bool:
@@ -180,6 +213,66 @@ def _summarize(rows: list[dict], pooled: list[dict], horizon: float) -> dict:
     return summary
 
 
+def compare_modes(current: list[dict], context: list[dict]) -> dict:
+    """The context mode against the current mode, paired over the same tools (D23).
+    Differences are context − current; the window-MAE gain is current − context
+    (positive: the context mode is better)."""
+    units = [r["unit"] for r in current]
+    if units != [r["unit"] for r in context]:
+        raise ValueError("the two modes must cover the same tools in the same order")
+    metrics = {}
+    for key in COMPARE_KEYS:
+        a = np.array([r[key] for r in current], float)
+        b = np.array([r[key] for r in context], float)
+        lo, hi = M.bootstrap_mean_ci(b - a)
+        metrics[key] = {
+            "current": float(a.mean()),
+            "context": float(b.mean()),
+            "difference_mean": float((b - a).mean()),
+            "ci95": [lo, hi],
+        }
+    gain = np.array(
+        [c["window_mae"] - x["window_mae"] for c, x in zip(current, context, strict=True)]
+    )
+    lo, hi = M.bootstrap_mean_ci(gain)
+    from scipy.stats import wilcoxon
+
+    p = float(wilcoxon(gain).pvalue) if len(gain) > 1 and np.any(gain != 0) else 1.0  # pyright: ignore[reportAttributeAccessIssue]
+    mean = float(gain.mean())
+    if mean >= aggregate.MIN_GAIN_S and lo > 0:
+        verdict = "context"
+    elif mean <= -aggregate.MIN_GAIN_S and hi < 0:
+        verdict = "current"
+    else:
+        verdict = "neither"
+    return {
+        "verdict": verdict,
+        "rule": MODE_RULE,
+        "window_mae_gain": {
+            "mean_gain_s": mean,
+            "ci95": [lo, hi],
+            "units_better": int((gain > 0).sum()),
+            "units_worse": int((gain < 0).sum()),
+            "units": int(len(gain)),
+            "p_two_sided_wilcoxon": p,
+        },
+        "metrics": metrics,
+        "per_unit": [
+            {
+                "unit": c["unit"],
+                "current_window_mae": c["window_mae"],
+                "context_window_mae": x["window_mae"],
+                "gain_s": float(g),
+                "current_window_bias": c["window_bias"],
+                "context_window_bias": x["window_bias"],
+                "current_increase_rate": c["increase_rate"],
+                "context_increase_rate": x["increase_rate"],
+            }
+            for c, x, g in zip(current, context, gain, strict=True)
+        ],
+    }
+
+
 def _role_results(store, preds, role):
     folds = leave_one_unit_out(store.unit_names)
     combined = aggregate.ensemble(preds, role)
@@ -209,8 +302,16 @@ def _row(*cells: object) -> str:
     return "| " + " | ".join(str(c) for c in cells) + " |"
 
 
+def _weight(w: float) -> str:
+    """1/15 rather than 0.0666667; plain decimals otherwise."""
+    text = f"{w:g}"
+    if w > 0 and len(text) > 6 and abs(1 / w - round(1 / w)) < 1e-6:
+        return f"1/{round(1 / w)}"
+    return text
+
+
 def _run_lines(res: dict) -> list[str]:
-    spec, prog = res["spec"], res["progress"]
+    spec, prog, inf = res["spec"], res["progress"], res["inference"]
     epochs = prog["selected_epoch"]
     seeds = ", ".join(str(s) for s in spec["seeds"])
     missing = f"; missing {', '.join(prog['missing'][:6])}" if prog["missing"] else ""
@@ -223,9 +324,10 @@ def _run_lines(res: dict) -> list[str]:
         "",
         f"- **Configuration:** players {', '.join(spec['players'])} and usage; GRU memory "
         f"(hidden {spec['memory_hidden']}, blocks of {spec['memory_block']} steps); loss = "
-        f"point-weighted MSE + {spec['mono_weight']:g} × monotonic penalty (a predicted RUL "
-        f"that rises) + {spec['slope_weight']:g} × slope consistency; {spec['epochs']} epochs "
-        f"of {spec['pairs_per_epoch']} pairs; seeds {seeds}.",
+        f"point-weighted MSE + {_weight(spec['mono_weight'])} × monotonic penalty (a "
+        f"predicted RUL that rises) + {_weight(spec['slope_weight'])} × slope consistency, "
+        "both moving only the earlier prediction of a pair; "
+        f"{spec['epochs']} epochs of {spec['pairs_per_epoch']} pairs; seeds {seeds}.",
         f"- **Fits:** {prog['done']} of {prog['expected']}{missing}; median "
         f"{_fmt(prog['fit_seconds']['median'], 0)} s per fit; selected epoch median "
         f"{_fmt(epochs['median'], 0)} (range {epochs['min']}-{epochs['max']}); "
@@ -233,8 +335,70 @@ def _run_lines(res: dict) -> list[str]:
         "- **Points:** each fold's test tool is scored on the project's 10 s points with "
         "RUL ≤ H = 1,500 s (the same points as RUL-Fuse and B0-B2). B6 predicts every 1 s "
         "point; each point's prediction is the mean of the seeds.",
+        f"- **Inference modes (D23):** current, the primary result (each prediction as the "
+        f"model makes it), and context (the model's earlier predictions of the tool, aged "
+        f"by the operating time since, blended with the new one; time constant "
+        f"{_fmt(inf['context_time_s'], 0)} s, cap margin {_fmt(inf['cap_margin_s'], 0)} s). "
+        "Both are compared at the end of the test and validation sections.",
         "",
     ]
+
+
+def _mode_lines(cmp: dict, where: str, per_unit: bool) -> list[str]:
+    m, g = cmp["metrics"], cmp["window_mae_gain"]
+
+    def cell(key: str, digits: int) -> list[str]:
+        s = m[key]
+        lo, hi = (_fmt(x, digits) for x in s["ci95"])
+        diff = f"{_fmt(s['difference_mean'], digits)} ({lo} to {hi})"
+        return [_fmt(s["current"], digits), _fmt(s["context"], digits), diff]
+
+    lines = [
+        f"### Inference modes: current against context ({where})",
+        "",
+        "Means over the tools; the last column is context − current with its 95 % "
+        "bootstrap interval over the tools.",
+        "",
+        _row("Metric", "Current", "Context", "Context − current"),
+        "|---|---|---|---|",
+        _row("Window MAE (s)", *cell("window_mae", 1)),
+        _row("Window RMSE (s)", *cell("window_rmse", 1)),
+        _row("Bias (s; positive = too optimistic)", *cell("window_bias", 1)),
+        _row("Whole-life MAE (s)", *cell("whole_life_mae", 1)),
+        _row("Late predictions (> 100 s too optimistic)", *cell("late_rate", 3)),
+        _row("Early predictions (> 100 s too pessimistic)", *cell("early_rate", 3)),
+        _row("Asymmetric score (lower is better)", *cell("phm_score", 3)),
+        _row("Within ±20 % of the true RUL", *cell("relative_accuracy", 3)),
+        _row("Rising steps (share of 1 s steps)", *cell("increase_rate", 3)),
+        "",
+        f"**Verdict: {VERDICTS[cmp['verdict']]}.** Window MAE, context − current: "
+        f"{_fmt(-g['mean_gain_s'])} s on average (95 % interval {_fmt(-g['ci95'][1])} to "
+        f"{_fmt(-g['ci95'][0])} s; negative = the context mode is better). The context mode "
+        f"is better on {g['units_better']} and worse on {g['units_worse']} of {g['units']} "
+        f"tools; two-sided Wilcoxon p = {g['p_two_sided_wilcoxon']:.3g}.",
+        "",
+        f"Rule, fixed before any result: {cmp['rule']}",
+        "",
+    ]
+    if per_unit:
+        lines += [
+            _row("Tool", "Current MAE (s)", "Context MAE (s)", "Gain (s)", "Current bias (s)")
+            + " Context bias (s) |",
+            "|---|---|---|---|---|---|",
+        ]
+        lines += [
+            _row(
+                r["unit"],
+                _fmt(r["current_window_mae"]),
+                _fmt(r["context_window_mae"]),
+                _fmt(r["gain_s"]),
+                _fmt(r["current_window_bias"]),
+                _fmt(r["context_window_bias"]),
+            )
+            for r in cmp["per_unit"]
+        ]
+        lines.append("")
+    return lines
 
 
 def _test_lines(res: dict) -> list[str]:
@@ -248,6 +412,8 @@ def _test_lines(res: dict) -> list[str]:
             "",
         ]
     t, lines = res["test"]["summary"], []
+    lines.append("All test tables are the current mode (primary), except the mode comparison.")
+    lines.append("")
     if res["test"].get("unsealed_before_freeze"):
         lines += [
             f"> **Test read on {res['test']['read_on']}, before the design freeze "
@@ -323,8 +489,9 @@ def _test_lines(res: dict) -> list[str]:
     for a, b in zip(t["error_by_bin"]["B6"], t["error_by_bin"]["B2"], strict=True):
         span = f"{a['from_s']:.0f}-{a['to_s']:.0f}"
         lines.append(_row(span, a["points"], _fmt(a["mae"]), _fmt(a["bias"]), _fmt(b["mae"])))
+    lines += ["", *_mode_lines(res["test"]["mode_comparison"], "test tools", per_unit=True)]
     if res.get("figures"):
-        lines += ["", "### Figures", ""]
+        lines += ["### Figures", ""]
         lines += [f"- `figures/{name}`: {caption}" for name, caption in res["figures"].items()]
     return [*lines, ""]
 
@@ -336,9 +503,10 @@ def _markdown(res: dict) -> str:
         *_test_lines(res),
         "## Validation results (each fold's validation tool; used only to select epochs)",
         "",
-        f"Window MAE {_ci(v['window_mae'])} s; B2 {_ci(v['B2_window_mae'])} s; better than B2 "
-        f"on {v['vs_B2']['units_better']} of {v['vs_B2']['units']} tools.",
+        f"Window MAE {_ci(v['window_mae'])} s (current mode); B2 {_ci(v['B2_window_mae'])} s; "
+        f"better than B2 on {v['vs_B2']['units_better']} of {v['vs_B2']['units']} tools.",
         "",
+        *_mode_lines(res["validation"]["mode_comparison"], "validation tools", per_unit=False),
     ]
     return "\n".join(lines)
 
@@ -365,21 +533,49 @@ def write_run_report(
         "spec": json.loads(json.dumps(asdict(spec))),
         "horizon_s": store.settings.horizon_s,
         "progress": {k: v for k, v in progress.items() if k != "_fits"},
+        "inference": {
+            "modes": list(INFERENCE_MODES),
+            "primary": "current",
+            "context_time_s": CONTEXT_TIME_S,
+            "cap_margin_s": store.settings.horizon_s * CAP_MARGIN_FRACTION,
+        },
     }
-    rows, _, summary = _role_results(store, preds, "validation")
-    res["validation"] = {"per_unit": rows, "summary": summary}
-    _write_csv(_flat(rows), out / "validation_per_unit.csv")
-    if test_open(unseal, today):
-        rows, trajectories, summary = _role_results(store, preds, "test")
-        res["test"] = {
+    context_preds = aggregate.with_mode(store, preds, "context")
+
+    def both_modes(role: str) -> tuple[dict, list[dict]]:
+        rows, trajectories, summary = _role_results(store, preds, role)
+        c_rows, c_trajectories, c_summary = _role_results(store, context_preds, role)
+        for t, c in zip(trajectories, c_trajectories, strict=True):
+            t["b6_context_s"] = c["b6_s"]
+        entry = {
             "per_unit": rows,
             "summary": summary,
+            "context": {"per_unit": c_rows, "summary": c_summary},
+            "mode_comparison": compare_modes(rows, c_rows),
+        }
+        _write_csv(
+            [{"mode": "current", **r} for r in _flat(rows)]
+            + [{"mode": "context", **r} for r in _flat(c_rows)],
+            out / f"{role}_per_unit.csv",
+        )
+        return entry, trajectories
+
+    res["validation"], _ = both_modes("validation")
+    comparison_rows = [
+        {"role": "validation", **r} for r in res["validation"]["mode_comparison"]["per_unit"]
+    ]
+    if test_open(unseal, today):
+        entry, trajectories = both_modes("test")
+        res["test"] = {
+            **entry,
             "read_on": today.isoformat(),
             "unsealed_before_freeze": today < aggregate.FREEZE,
         }
-        _write_csv(_flat(rows), out / "test_per_unit.csv")
+        comparison_rows += [{"role": "test", **r} for r in entry["mode_comparison"]["per_unit"]]
+        summary, c_summary = entry["summary"], entry["context"]["summary"]
         _write_csv(
             [dict(error="B6", **r) for r in summary["error_by_bin"]["B6"]]
+            + [dict(error="B6 context", **r) for r in c_summary["error_by_bin"]["B6"]]
             + [dict(error="B2", **r) for r in summary["error_by_bin"]["B2"]],
             out / "error_by_bin.csv",
         )
@@ -390,15 +586,17 @@ def write_run_report(
                     "tau_s": a,
                     "y_s": b,
                     "b6_s": c,
+                    "b6_context_s": g,
                     "seed_min_s": d,
                     "seed_max_s": e,
                     "b2_s": f,
                 }
                 for t in trajectories
-                for a, b, c, d, e, f in zip(
+                for a, b, c, g, d, e, f in zip(
                     t["tau_s"],
                     t["y_s"],
                     t["b6_s"],
+                    t["b6_context_s"],
                     t["seed_min_s"],
                     t["seed_max_s"],
                     t["b2_s"],
@@ -409,6 +607,7 @@ def write_run_report(
         )
         if figures:
             res["figures"] = make_figures(res, trajectories, out / "figures")
+    _write_csv(comparison_rows, out / "mode_comparison.csv")
     (out / "run_summary.json").write_text(
         json.dumps(res, indent=1, default=float), encoding="utf-8"
     )
@@ -429,7 +628,7 @@ def _flat(rows: list[dict]) -> list[dict]:
 
 INK, INK_2, MUTED = "#0b0b0b", "#52514e", "#898781"
 GRID, AXIS, SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
-B6_COLOR, B2_COLOR = "#2a78d6", "#eb6834"  # categorical slots 1 and 2
+B6_COLOR, B2_COLOR, CONTEXT_COLOR = "#2a78d6", "#eb6834", "#1baf7a"  # slots 1, 2, 3
 
 
 def _style(ax, grid: str = "both") -> None:
@@ -478,8 +677,9 @@ def make_figures(res: dict, trajectories: list[dict], folder: Path) -> dict[str,
             t["b6_s"],
             color=B6_COLOR,
             linewidth=1.6,
-            label="B6 (mean of seeds; band: seed range)",
+            label="B6 current mode (mean of seeds; band: seed range)",
         )
+        ax.plot(x, t["b6_context_s"], color=CONTEXT_COLOR, linewidth=1.6, label="B6 context mode")
         ax.set_ylim(0, horizon * 1.05)
         ax.set_title(t["unit"], fontsize=9, color=INK, loc="left")
     for ax in axes.flat[n:]:
@@ -493,7 +693,7 @@ def make_figures(res: dict, trajectories: list[dict], folder: Path) -> dict[str,
         handles,
         labels,
         loc="upper center",
-        ncol=3,
+        ncol=4,
         frameon=False,
         fontsize=8,
         bbox_to_anchor=(0.5, 1.02),
@@ -501,16 +701,20 @@ def make_figures(res: dict, trajectories: list[dict], folder: Path) -> dict[str,
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(folder / "rul_trajectories.png", dpi=160, facecolor=SURFACE)
     plt.close(fig)
-    made["rul_trajectories.png"] = "true and predicted RUL of each test tool over its life, with B2"
+    made["rul_trajectories.png"] = (
+        "true and predicted RUL of each test tool over its life: both modes and B2"
+    )
 
-    # 2. Window MAE per test tool: B6 against B2 (dot plot)
+    # 2. Window MAE per test tool: both modes and B2 (dot plot)
     rows = res["test"]["per_unit"]
+    context_rows = res["test"]["context"]["per_unit"]
     fig, ax = plt.subplots(figsize=(6.4, 3.2))
     fig.patch.set_facecolor(SURFACE)
     _style(ax, grid="x")  # gridlines along the value axis only
     y = np.arange(len(rows))
-    for i, r in enumerate(rows):
-        ax.plot([r["window_mae"], r["B2_window_mae"]], [i, i], color=GRID, linewidth=2, zorder=1)
+    for i, (r, c) in enumerate(zip(rows, context_rows, strict=True)):
+        values = [r["window_mae"], c["window_mae"], r["B2_window_mae"]]
+        ax.plot([min(values), max(values)], [i, i], color=GRID, linewidth=2, zorder=1)
     ax.scatter(
         [r["B2_window_mae"] for r in rows],
         y,
@@ -529,7 +733,17 @@ def make_figures(res: dict, trajectories: list[dict], folder: Path) -> dict[str,
         edgecolor=SURFACE,
         linewidth=1.5,
         zorder=3,
-        label="B6",
+        label="B6 current mode",
+    )
+    ax.scatter(
+        [c["window_mae"] for c in context_rows],
+        y,
+        s=40,
+        color=CONTEXT_COLOR,
+        edgecolor=SURFACE,
+        linewidth=1.5,
+        zorder=4,
+        label="B6 context mode",
     )
     ax.set_yticks(y, [r["unit"] for r in rows])
     ax.invert_yaxis()
@@ -539,24 +753,25 @@ def make_figures(res: dict, trajectories: list[dict], folder: Path) -> dict[str,
     fig.tight_layout()
     fig.savefig(folder / "window_mae_per_tool.png", dpi=160, facecolor=SURFACE)
     plt.close(fig)
-    made["window_mae_per_tool.png"] = "window MAE of each test tool, B6 and B2"
+    made["window_mae_per_tool.png"] = "window MAE of each test tool: both modes and B2"
 
     # 3. Error by true RUL (grouped columns, 2 px surface gap)
     bins = res["test"]["summary"]["error_by_bin"]
+    context_bins = res["test"]["context"]["summary"]["error_by_bin"]["B6"]
     labels = [f"{b['from_s']:.0f}-{b['to_s']:.0f}" for b in bins["B6"]]
     x = np.arange(len(labels))
     width = 0.15  # about 24 px at this size: thin columns, the rest of the band is air
+    step = width + 0.02  # 2 px surface gap between neighbouring columns
     fig, ax = plt.subplots(figsize=(6.4, 3.0))
     fig.patch.set_facecolor(SURFACE)
     _style(ax, grid="y")  # gridlines along the value axis only
-    ax.bar(x - width / 2 - 0.01, [b["mae"] for b in bins["B6"]], width, color=B6_COLOR, label="B6")
-    ax.bar(
-        x + width / 2 + 0.01,
-        [b["mae"] for b in bins["B2"]],
-        width,
-        color=B2_COLOR,
-        label="B2 usage rule",
+    series = (
+        (bins["B6"], B6_COLOR, "B6 current mode"),
+        (context_bins, CONTEXT_COLOR, "B6 context mode"),
+        (bins["B2"], B2_COLOR, "B2 usage rule"),
     )
+    for i, (values, color, label) in enumerate(series):
+        ax.bar(x + (i - 1) * step, [b["mae"] for b in values], width, color=color, label=label)
     ax.set_xticks(x, labels)
     ax.set_xlabel("true RUL (s)", color=INK_2)
     ax.set_ylabel("MAE (s)", color=INK_2)
@@ -564,5 +779,7 @@ def make_figures(res: dict, trajectories: list[dict], folder: Path) -> dict[str,
     fig.tight_layout()
     fig.savefig(folder / "error_by_rul.png", dpi=160, facecolor=SURFACE)
     plt.close(fig)
-    made["error_by_rul.png"] = "MAE by true-RUL range, pooled over the test tools, B6 and B2"
+    made["error_by_rul.png"] = (
+        "MAE by true-RUL range, pooled over the test tools: both modes and B2"
+    )
     return made

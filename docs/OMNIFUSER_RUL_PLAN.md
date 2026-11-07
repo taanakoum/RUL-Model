@@ -1,5 +1,15 @@
 # OmniFuser-RUL: an OmniFuser baseline for the RUL task
 
+**Version 5, 2026-11-07: the penalty can no longer drag predictions down, and the report
+compares two inference modes.**
+
+- The temporal terms now move only the earlier prediction of a pair. Their weights are
+  1/15 and 0.05, down from 1.0 and 0.5 (O9).
+- Every prediction is reported in the current mode and in a context mode, where the
+  tool's earlier predictions guide the new one (O13, §7).
+
+The single run of version 4 is unchanged otherwise. §14 records what changed and why.
+
 **Version 4, 2026-11-07: B6 is trained once, with one fixed setting, and reported (O12).**
 No comparison of settings is run:
 
@@ -62,10 +72,11 @@ independent architecture:
 | O6 | Architecture values | OmniFuser `v1.0` defaults: d = 32, 4 RTD blocks, 4 GAT layers × 4 heads, k = 4, 2 C2F rounds; input of 96 steps; dropout 0.1; Adam, learning rate 1e-4, batch 32, 30 epochs. No search | Minimal change |
 | O7 | Time step | **1 s segments** (OmniFuser's own pooled step): B6 has its own store cut at S = 1 s. A fold trains on about 29,000 prediction points instead of about 3,000 at 10 s, and 96 steps are 96 s, about one pass. **Scored and selected on the 10 s grid** (D7): a 1 s store contains every 10 s point with the same τ, RUL and window, so B6, RUL-Fuse and B0-B5 are compared on the same 3,747 points | You (2026-11-06): more training examples; checked in §14 |
 | O8 | Memory | A **GRU over the tool's whole history** (`rulfuse.models.memory.CausalMemory`, shared with RUL-Fuse, D21). Its inputs are every step's force vector, a projection of the photo composite and a photo flag, averaged in 10-step blocks. Step t reads the state after the last complete block (causal); the head reads [last fused step ; memory state]. Hidden size 64 | You (2026-11-06): every new segment uses the information of all previous ones |
-| O9 | Temporal loss | Training samples are **pairs** of points of one tool, the earlier at lag 1 (the previous segment) half the time and up to 200 steps otherwise. The loss adds **1.0 × relu(ŷ_later − ŷ_earlier)** (a predicted RUL never rises) and **0.5 × ((ŷ_earlier − ŷ_later) − Δτ)²** where the earlier target is below the cap (true RUL falls by exactly Δτ), all on y/H (`rulfuse.models.losses`, D22) | You (2026-11-06), plus the slope term (a stronger statement of the same fact, already in RUL-Fuse's plan) |
+| O9 | Temporal loss | Training samples are **pairs** of points of one tool, the earlier at lag 1 (the previous segment) half the time and up to 200 steps otherwise. The loss adds **1/15 × relu(ŷ_later − ŷ_earlier)** (a predicted RUL never rises) and **0.05 × ((ŷ_earlier − ŷ_later) − Δτ)²** where the earlier target is below the cap (true RUL falls by exactly Δτ), all on y/H (`rulfuse.models.losses`, D22). **Both terms move only the earlier prediction; the later one is the fixed reference** (version 5) | You (2026-11-06), plus the slope term (a stronger statement of the same fact, already in RUL-Fuse's plan). Version 5 (2026-11-07), after your question: with weight 1.0 on both predictions, an earlier prediction the model cannot correct dragged later ones down to it (§14) |
 | O10 | Epochs | **2,048 pairs (4,096 windows) per epoch**, 30 epochs: a fixed training budget, close to version 2's, despite 10× more points | Cost (§10) |
 | O11 | Ablations | Two extra arms with all players: **without the memory** and **without the temporal terms** | Measures what O8 and O9 add. **Not run (O12)** |
 | O12 | One full run | **One configuration, trained once:** force + every admitted photo type + usage; 1 s steps; the GRU memory (O8); the loss with the monotonic penalty and the slope term (O9); 10 folds × 3 seeds = 30 fits. Its report gives each tool's test result (each tool is the test tool of one fold) against B0-B2 on the same points. **The modality study (§8), the ablations (O11) and any GRU/LSTM comparison are not run.** Test results appear from the freeze (D15), or earlier with `--unseal`, which the report records | You (2026-11-07): no experiments on the OmniFuser implementation, one setting, one full run, test results for a report |
+| O13 | Inference modes | **Every fit's predictions are reported in two modes** (`rulfuse.inference`, D23): **current**, each prediction as the model makes it (the primary result); **context**, where the tool's earlier predictions, aged by the operating time since, are blended with the new one (time constant 120 s, fixed in advance). The report compares the two on the same tools, with a decision rule fixed in advance (§7). It is computed from the same 30 fits; nothing is trained twice | You (2026-11-07): a second mode where previous segments guide the new prediction, and a way to compare the two |
 
 ## 2. Summary
 
@@ -237,7 +248,8 @@ longer measure what they add.
 2. Train for 30 epochs of 2,048 pairs (O10). Per batch of 16 pairs (32 windows):
    - run the memory over the training tools' whole histories;
    - encode the windows;
-   - minimize the point-weighted MSE + 1.0 × hinge + 0.5 × slope term (O9).
+   - minimize the point-weighted MSE + 1/15 × hinge + 0.05 × slope term (O9; both terms
+     move only the earlier prediction of each pair).
 
    Use Adam with learning rate 1e-4, and clip gradients at 1.0 (OmniFuser's
    settings).
@@ -267,6 +279,69 @@ longer measure what they add.
 - tool-bootstrap 95 % intervals.
 
 B6 gives points, not intervals, so its uncertainty and decision rows show "–".
+
+**Inference modes (O13, D23; `rulfuse.inference`).** Every fit's predictions are
+reported twice:
+
+- **Current mode:** each prediction as the model makes it. It already uses the tool's
+  past *signals*: the 96 s input window and the GRU memory of the whole history. It does
+  not use the model's own past *predictions*. This is the primary result, fixed before
+  any result.
+- **Context mode:** the model's earlier predictions of the same tool also guide the new
+  one. A running estimate is aged by the cutting time elapsed (the remaining life falls
+  by one second per second) and blended with the new prediction: a prediction made Δ
+  seconds ago keeps the weight e^(−Δ/120 s). Near the cap (a prediction within H/15 of
+  H, which only says "at least about H"), ageing never takes the estimate below the new
+  prediction. Each fit keeps its own context, and the seeds are then averaged, as in the
+  current mode.
+
+Properties, each tested (`tests/test_inference.py`):
+
+- **Causal:** output t uses predictions 0..t of the same tool only.
+- **Exact:** a trajectory that is right, cap included, is left unchanged.
+- **It recovers:** after an early prediction that was too low, the output rises back.
+  The leftover error falls as e^(−t/120 s), to 5 % after 6 minutes whatever its size. A
+  "never rise" rule (running minimum) can only wait for the true RUL to come down to it:
+  an error of e seconds lasts e seconds.
+- **It removes jitter:** on synthetic noise, but not a bias that lasts a whole tool.
+
+**Is the context mode valid in production?** Yes: it is causal, and it needs one number
+per tool, which a deployed system has. It needs three operating rules:
+
+- reset the context when the tool is changed;
+- keep it across machine stops (it ages by cutting time, like the rest of the project, so
+  idle time costs no life);
+- feed it every prediction in time order.
+
+Its limits:
+
+- **Lag.** A real sudden change (a chipped edge) reaches the output with a 120 s time
+  constant, 95 % after 6 minutes.
+- **No bias correction.** It removes noise, not bias: if the model is wrong for a whole
+  tool, so is the context.
+- **Correlated inputs.** Neighbouring predictions share most of their inputs, so
+  averaging them gains less than averaging independent ones would.
+
+A learned context, which feeds past predictions into the network, was not chosen. It
+would need a second model trained on its own outputs. That model would be trained on
+true or teacher-forced past values and deployed on its own, which risks feedback of its
+own errors (the lock-in that the version-5 loss removes). It would also be a second B6
+setting (O12).
+
+**How the two modes are compared** (`run_report.compare_modes`):
+
+- the same points, tools and metrics for both modes;
+- for each metric, context − current with a 95 % bootstrap interval over the tools;
+- for the window MAE, the tools better and worse, and a two-sided Wilcoxon test.
+
+**Decision rule, fixed in advance:** the context mode is better if it lowers the mean
+window MAE by at least 10 s (H/150, plan §4.4) and the interval of that gain lies above
+0. The current mode is better under the mirror condition. Otherwise neither is clearly
+better.
+
+The time constant was fixed before any B6 result, so the comparison on the validation
+tools is fair too (those tools selected the epochs, for both modes alike). The test
+comparison follows the seal (D15).
 
 **Comparison with RUL-Fuse:**
 
@@ -376,8 +451,9 @@ way, the ranking is a property of the data, not of one model.
 | V-14 | Input dimensions (O7) | Windows are (B, 96, 31) force vectors and (B, 96) photo rows whatever S; OmniFuser's parameter count is the same at 10 s and finer steps |
 | V-15 | Memory causality (O8) | The memory state at step t is unchanged when any step after t changes; only complete blocks are read; padding is never averaged; a rise shared by all inputs registers |
 | V-16 | Switches reach the memory (O8) | With force, photos or usage off, changing that input changes neither the window output nor the memory |
-| V-17 | Temporal loss (O9) | The hinge is zero for non-increasing pairs and pushes a rising pair apart in the right direction; the slope term is zero when the decrease equals Δτ; on the toy, the same fits without the terms rise more |
+| V-17 | Temporal loss (O9) | The hinge is zero for non-increasing pairs and lifts the earlier prediction of a rising pair; the slope term is zero when the decrease equals Δτ; **neither term reaches the later prediction**: in `pair_loss`, the later half's gradient equals the MSE's, so a stuck earlier prediction cannot drag a later one; a stuck later prediction moves the earlier one by at most about 1/15 × H plus a small slope share; on the toy, the same fits without the terms rise more |
 | V-18 | Scoring only the right fits | Scores use only fits whose `fit.json` records the arm's settings (a partly rerun arm never mixes) |
+| V-19 | Inference modes (O13) | The context mode is causal, leaves an exact trajectory unchanged (cap and uneven steps included), recovers from a low start as e^(−t/T), removes jitter without sliding off the cap; each fit, unit and role is filtered on its own; the report's comparison finds no difference for constant offsets and finds the context mode better for independent noise |
 
 ## 10. Stages, timeline and cost
 

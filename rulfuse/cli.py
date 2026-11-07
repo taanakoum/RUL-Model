@@ -307,7 +307,7 @@ def cmd_omnifuser_report(args: argparse.Namespace) -> int:
     import json as _json
 
     from rulfuse.core.store import SegmentStore, build_segment_store
-    from rulfuse.omnifuser_rul.run_report import write_run_report
+    from rulfuse.omnifuser_rul.run_report import VERDICTS, write_run_report
 
     store = SegmentStore.open(build_segment_store(_dataset(args)))
     spec = _arm_spec(args, args.players)
@@ -315,17 +315,18 @@ def cmd_omnifuser_report(args: argparse.Namespace) -> int:
     res = _json.loads((out / "run_summary.json").read_text(encoding="utf-8"))
     prog = res["progress"]
     print(f"run {spec.name}: {prog['done']}/{prog['expected']} fits")
-    v = res["validation"]["summary"]
-    b2v = v["B2_window_mae"]["mean"]
-    print(f"validation window MAE {v['window_mae']['mean']:.1f} s (B2 {b2v:.1f} s)")
-    if "test" in res:
-        t = res["test"]["summary"]
-        b2t = t["B2_window_mae"]["mean"]
+    for role in ("validation", "test"):
+        if role not in res:
+            continue
+        s, cmp = res[role]["summary"], res[role]["mode_comparison"]
+        current, context = (cmp["metrics"]["window_mae"][m] for m in ("current", "context"))
+        better = f"{s['vs_B2']['units_better']}/{s['vs_B2']['units']}"
         print(
-            f"test window MAE {t['window_mae']['mean']:.1f} s (B2 {b2t:.1f} s); "
-            f"better than B2 on {t['vs_B2']['units_better']}/{t['vs_B2']['units']} tools"
+            f"{role} window MAE: current mode {current:.1f} s, context mode {context:.1f} s "
+            f"(B2 {s['B2_window_mae']['mean']:.1f} s; current better than B2 on {better} tools)"
         )
-    else:
+        print(f"  inference modes: {VERDICTS[cmp['verdict']]} (rule in REPORT.md)")
+    if "test" not in res:
         print("test results sealed until the design freeze (2026-12-01); --unseal reads them now")
     print(f"wrote {out / 'REPORT.md'}")
     return 0
@@ -354,8 +355,10 @@ def _add_omnifuser_options(p: argparse.ArgumentParser, players: bool = True) -> 
     p.add_argument("--no-memory", action="store_true", help="no GRU memory (ablation, O8)")
     p.add_argument("--memory-hidden", type=int, default=64)
     p.add_argument("--memory-block", type=int, default=10, help="steps per memory block")
-    p.add_argument("--mono-weight", type=float, default=1.0, help="monotonic hinge (O9)")
-    p.add_argument("--slope-weight", type=float, default=0.5, help="slope consistency (O9)")
+    p.add_argument(
+        "--mono-weight", type=float, default=1.0 / 15.0, help="monotonic hinge (O9; 1/15)"
+    )
+    p.add_argument("--slope-weight", type=float, default=0.05, help="slope consistency (O9)")
     p.add_argument("--max-lag", type=int, default=200, help="largest pair lag, in steps")
     p.add_argument("--pairs-per-epoch", type=int, default=2048)
 

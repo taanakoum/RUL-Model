@@ -69,7 +69,8 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D19 | Seeds | **3 seeds everywhere:** gate decisions and the final model are 3-seed ensembles | You (2026-11-04) |
 | D20 | OmniFuser baseline | **B6, OmniFuser-RUL:** the OmniFuser architecture (frozen EfficientNet-B0 photos, C2F fusion, an RUL head) on this project's targets, processing, folds, weights, selection and metrics. A separate model: no RUL-Fuse decision reads it. Test reads follow D15. Plan: `docs/OMNIFUSER_RUL_PLAN.md` Version 3 (2026-11-06): 1 s steps scored on the 10 s points, a GRU memory and the temporal loss (D21, D22). **Version 4 (2026-11-07): one configuration trained once (10 folds × 3 seeds) and reported; no modality study and no comparison of settings** | You (2026-11-05, 2026-11-06) |
 | D21 | Memory | **A causal recurrent memory of each unit's whole history** (`rulfuse.models.memory.CausalMemory`, a GRU over block means of the step inputs; step t reads only complete blocks). B6 uses it now. In RUL-Fuse, F1 and F0's signal expert concatenate its state (over the force tokens, block 1) with their output at every force token before the head; Gate 2b reports a no-memory control (§7.5). F1's attention already reaches the whole history; the memory adds a running summary that is cheap at any length | You (2026-11-06): each new segment uses the information of all previous ones |
-| D22 | Rising predictions | **Penalized in the loss of both models** (`rulfuse.models.losses`): λ_mono · relu(μ_later − μ_earlier) on pairs of points of one unit (RUL can only fall), with the slope-consistency term where the target is below the cap; λ_mono = 1.0 and λ_cons = 0.5 on y/H in both models (§6.7) | You (2026-11-06) |
+| D22 | Rising predictions | **Penalized in the loss of both models** (`rulfuse.models.losses`): λ_mono · relu(μ_later − μ_earlier) on pairs of points of one unit (RUL can only fall), with the slope-consistency term where the target is below the cap; λ_mono = 1/15 and λ_cons = 0.05 on y/H in both models (§6.7). **Both terms move only the earlier prediction of a pair; the later one is the fixed reference** | You (2026-11-06). Weights and reference changed 2026-11-07, after your question: with 1.0 on both predictions, an earlier prediction the model cannot correct dragged later ones down to it |
+| D23 | Inference modes | **Two modes for every model's predictions** (`rulfuse.inference`): **current**, each prediction as the model makes it (the primary result); **context**, where the unit's earlier predictions, aged by the operating time since, are blended with the new one (time constant 120 s and cap margin H/15, fixed in advance). Both are reported side by side with a paired comparison and a decision rule fixed in advance (§10.3). B6 reports both now; RUL-Fuse's evaluation uses the same function | You (2026-11-07): a mode where previous segments guide the new prediction, and a way to compare the two |
 
 ---
 
@@ -800,10 +801,17 @@ $$
   relu(μ_j − μ_i). It holds in the capped region too, where the consistency
   term does not apply. The functions are shared with B6
   (`rulfuse.models.losses`).
-- **Defaults:** λ_nll = 0.5, λ_hi = 0.3 (0 without an HI), λ_cons = 0.5,
-  λ_mono = 1.0 (D22; λ_cons was 0.1 before 2026-11-06, raised to B6's value so
-  both models share one temporal loss). MSE and MAE are always both reported
-  (§10).
+- **The later point is the reference.** In both temporal terms the later
+  prediction is detached: they move only the earlier prediction. So an earlier
+  prediction the model cannot correct never drags later ones down with it
+  (D22, 2026-11-07).
+- **Defaults:** λ_nll = 0.5, λ_hi = 0.3 (0 without an HI), λ_cons = 0.05,
+  λ_mono = 1/15 (D22). The hinge weight acts as a tolerance: it can hold a
+  prediction at most about λ_mono × H = 100 s away from what the MSE wants.
+  With the detach, a larger weight would shift every prediction up under noise
+  the model cannot remove (about 160-215 s at λ_mono = 1). History: λ_cons was
+  0.1 before 2026-11-06, then 0.5 with λ_mono = 1.0 until 2026-11-07. MSE and MAE
+  are always both reported (§10).
 
 ### 6.8 Regularization and augmentation (8 trajectories per fold)
 
@@ -1236,6 +1244,16 @@ Every table shows these, in seconds.
   one-sided p is 0.001; the 0.05 level needs W ≤ 10.
 - **Breakdowns:** error by RUL bin (0-300 s, …, 1,200-1,500 s) and by position
   inside the recording (OmniFuser's phase-locking lesson).
+- **Inference modes (D23).** Every table is computed in the current mode (primary)
+  and in the context mode (`rulfuse.inference`). The modes are compared on the same
+  tools:
+  - context − current per metric, with a tool-bootstrap 95 % interval;
+  - the window-MAE gain, with tools better and worse and a two-sided Wilcoxon test.
+
+  The context mode is better if it lowers the mean window MAE by at least 10 s
+  (§4.4) with an interval above 0, the current mode under the mirror condition,
+  otherwise neither. `docs/OMNIFUSER_RUL_PLAN.md` §7 gives the definition and its
+  validity in production.
 
 ### 10.4 Figures
 

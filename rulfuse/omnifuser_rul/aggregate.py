@@ -7,6 +7,9 @@
   capped target. The temporal stability (``metrics.temporal_stability``: how often and by
   how much the prediction rises, and |Δŷ + Δτ|) is measured over every prediction point.
   Summaries: mean ± sd over units, and pooled over all window points.
+* Inference modes (D23, ``rulfuse.inference``): ``with_mode`` turns each fit's predictions
+  of a unit, in time order, into the ``context`` mode before the seeds are averaged; the
+  ``current`` mode is the predictions as written.
 * Test units are sealed until the design freeze: ``role="test"`` needs ``after_freeze``
   and a date on or after ``FREEZE``.
 * Shapley values over the players, with v(S) = −window MAE per test unit.
@@ -30,6 +33,7 @@ from rulfuse import metrics as M
 from rulfuse.baselines import b2
 from rulfuse.core.folds import leave_one_unit_out
 from rulfuse.core.store import SegmentStore, grid_mask
+from rulfuse.inference import CONTEXT_TIME_S, apply_mode
 from rulfuse.omnifuser_rul.data import EVAL_GRID_S
 from rulfuse.omnifuser_rul.train import FORCE
 
@@ -78,6 +82,34 @@ def load_predictions(folder: Path, signature: dict | None = None) -> dict[str, n
     if "on_grid" not in out:  # predictions made at the grid's own points
         out["on_grid"] = np.ones(len(out["row"]), dtype=bool)
     return out
+
+
+def with_mode(
+    store: SegmentStore,
+    predictions: dict[str, np.ndarray],
+    mode: str,
+    time_constant_s: float = CONTEXT_TIME_S,
+) -> dict[str, np.ndarray]:
+    """``predictions`` in inference mode ``mode`` (D23): each fit's (fold, seed) predictions
+    of one unit and role, in time order, through ``rulfuse.inference.apply_mode``. Every
+    other column is unchanged."""
+    if mode == "current":
+        return predictions
+    tau = store.segments["tau_s"][predictions["row"]].astype(np.float64)
+    role = np.unique(predictions["role"], return_inverse=True)[1].reshape(-1)
+    unit = np.unique(predictions["unit"], return_inverse=True)[1].reshape(-1)
+    fold = np.asarray(predictions["fold"], dtype=np.int64)
+    seed = np.asarray(predictions["seed"], dtype=np.int64)
+    order = np.lexsort((predictions["row"], tau, unit, role, seed, fold))
+    key = np.stack([fold, seed, role, unit], axis=1)[order]
+    starts = np.flatnonzero(np.r_[True, np.any(key[1:] != key[:-1], axis=1)])
+    ends = np.r_[starts[1:], len(order)]
+    values = np.asarray(predictions["prediction_s"], dtype=np.float64).copy()
+    horizon = store.settings.horizon_s
+    for start, end in zip(starts, ends, strict=True):
+        index = order[start:end]
+        values[index] = apply_mode(mode, tau[index], values[index], horizon, time_constant_s)
+    return {**predictions, "prediction_s": values}
 
 
 def ensemble(predictions: dict[str, np.ndarray], role: str) -> dict[str, np.ndarray]:

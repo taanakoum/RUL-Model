@@ -11,10 +11,12 @@ A fit (fold, seed):
 
    * the memory runs over the training units' whole histories (O8);
    * OmniFuser encodes the window of each point of each pair;
-   * the loss is the point-weighted MSE on y/H of both points
+   * the loss (``pair_loss``) is the point-weighted MSE on y/H of both points
      + ``mono_weight`` × the monotonic hinge relu(ŷ_later − ŷ_earlier)
      + ``slope_weight`` × the slope consistency ((ŷ_earlier − ŷ_later) − Δτ/H)² where the
-     earlier target is below the cap (O9, D22).
+     earlier target is below the cap (O9, D22). In both temporal terms the later
+     prediction is the fixed reference (detached): they move the earlier prediction only,
+     so an earlier prediction the model cannot correct never drags later ones with it.
 
    Adam, learning rate 1e-4, gradients clipped at 1 (OmniFuser's settings).
 3. After each epoch, the weighted whole-life MAE (s) on the validation unit's points of the
@@ -72,8 +74,8 @@ class ArmSpec:
     memory: bool = True  # O8
     memory_hidden: int = 64
     memory_block: int = 10
-    mono_weight: float = 1.0  # O9: relu(ŷ_later − ŷ_earlier)
-    slope_weight: float = 0.5  # O9: slope consistency below the cap
+    mono_weight: float = 1.0 / 15.0  # O9: relu(ŷ_later − ŷ_earlier); pulls ≤ about H/15
+    slope_weight: float = 0.05  # O9: slope consistency below the cap
     max_lag: int = 200  # steps
     pairs_per_epoch: int = 2048
 
@@ -178,6 +180,32 @@ def weighted_mae_s(
     return float(np.sum(w * np.abs(predicted - unit.y_s[steps])) / max(w.sum(), 1e-12))
 
 
+def pair_loss(
+    prediction,
+    target,
+    weight,
+    elapsed,
+    paired,
+    mono_weight: float,
+    slope_weight: float,
+):
+    """The training loss of a batch of k pairs (O9, D22). ``prediction``, ``target`` and
+    ``weight`` hold the k earlier points then the k later points (y/H); ``elapsed`` is each
+    pair's Δτ/H and ``paired`` marks the pairs whose later step is after the earlier one.
+    Returns (loss, parts). The temporal terms reach the earlier predictions only
+    (``rulfuse.models.losses``): the later half's gradient is the MSE's alone."""
+    from rulfuse.models.losses import monotonic_hinge, slope_consistency
+
+    mse = (weight * (prediction - target) ** 2).sum() / weight.sum().clamp_min(1e-12)
+    k = len(prediction) // 2
+    p_earlier, p_later = prediction[:k], prediction[k:]
+    hinge = monotonic_hinge(p_earlier, p_later, paired)
+    below_cap = paired & (target[:k] < 1.0 - 1e-9)
+    slope = slope_consistency(p_earlier, p_later, elapsed, below_cap)
+    loss = mse + mono_weight * hinge + slope_weight * slope
+    return loss, {"mse": mse, "hinge": hinge, "slope": slope}
+
+
 def _memory_for_batch(model, tensors: FitTensors, drop):
     """Memory states of the training units, (variants, U, n, hidden): the full inputs, and
     without force or photos when modality dropout uses them."""
@@ -206,8 +234,6 @@ def fit(
     log=print,
 ) -> FitResult:
     import torch
-
-    from rulfuse.models.losses import monotonic_hinge, slope_consistency
 
     device = _device(device)
     torch.manual_seed(seed)
@@ -274,17 +300,16 @@ def fit(
                 state = memory[variant, both_unit, both_step]
             force_w, images, image_indices = train_t.windows(both_unit, both_step)
             prediction = model(force_w, images, image_indices, state, drop_both)
-            target = y[both_unit, both_step]
-            weight = w[both_unit, both_step]
-            mse = (weight * (prediction - target) ** 2).sum() / weight.sum().clamp_min(1e-12)
-            k = len(unit)
-            p_earlier, p_later = prediction[:k], prediction[k:]
-            paired = later > earlier
-            hinge = monotonic_hinge(p_earlier, p_later, paired)
-            elapsed = tau[unit, later] - tau[unit, earlier]
-            below_cap = paired & (target[:k] < 1.0 - 1e-9)
-            slope = slope_consistency(p_earlier, p_later, elapsed, below_cap)
-            loss = mse + spec.mono_weight * hinge + spec.slope_weight * slope
+            loss, parts = pair_loss(
+                prediction,
+                y[both_unit, both_step],
+                w[both_unit, both_step],
+                tau[unit, later] - tau[unit, earlier],
+                later > earlier,
+                spec.mono_weight,
+                spec.slope_weight,
+            )
+            mse, hinge, slope = parts["mse"], parts["hinge"], parts["slope"]
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

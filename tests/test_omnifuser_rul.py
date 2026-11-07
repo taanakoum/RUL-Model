@@ -32,6 +32,7 @@ from rulfuse.omnifuser_rul.study import modality_arms  # noqa: E402
 from rulfuse.omnifuser_rul.train import (  # noqa: E402
     ArmSpec,
     arm_dir,
+    pair_loss,
     predict_unit,
     run_arm,
     select_epoch,
@@ -432,6 +433,67 @@ def test_the_temporal_terms_reduce_rising_predictions(toy_b6, tmp_path):
     assert rates["on"] < rates["off"]
 
 
+def test_the_loss_defaults_and_the_cli_agree():
+    import argparse
+
+    from rulfuse import cli
+
+    spec = ArmSpec(players=("force",))
+    assert spec.mono_weight == pytest.approx(1 / 15) and spec.slope_weight == 0.05
+    parser = argparse.ArgumentParser()
+    cli._add_omnifuser_options(parser)
+    args = parser.parse_args([])
+    assert cli._arm_spec(args, ["force"]).signature() == spec.signature()  # fits match
+
+
+def _pair_batch(earlier_s, later_s, y_earlier_s, y_later_s, horizon=1500.0):
+    double = torch.float64
+    values = torch.tensor([*earlier_s, *later_s], dtype=double) / horizon
+    prediction = values.clone().requires_grad_(True)
+    target = torch.tensor([*y_earlier_s, *y_later_s], dtype=double) / horizon
+    elapsed = torch.tensor(y_earlier_s, dtype=double) - torch.tensor(y_later_s, dtype=double)
+    paired = torch.ones(len(earlier_s), dtype=torch.bool)
+    return prediction, target, torch.ones(len(target), dtype=double), elapsed / horizon, paired
+
+
+def test_the_training_loss_moves_only_the_earlier_prediction():
+    """pair_loss, as fit() calls it. Pair 0: the earlier prediction is stuck 450 s too low,
+    the later one is at its target; pair 1: both right. The later half's gradient is the
+    MSE's alone (zero at the target), so a stuck earlier prediction cannot drag it down,
+    while the temporal terms lift the stuck earlier one."""
+    spec = ArmSpec(players=("force",))
+    prediction, target, weight, elapsed, paired = _pair_batch(
+        [450.0, 900.0], [700.0, 600.0], [900.0, 900.0], [700.0, 600.0]
+    )
+    loss, parts = pair_loss(
+        prediction, target, weight, elapsed, paired, spec.mono_weight, spec.slope_weight
+    )
+    (grad,) = torch.autograd.grad(loss, prediction, retain_graph=True)
+    (mse_grad,) = torch.autograd.grad(parts["mse"], prediction)
+    torch.testing.assert_close(grad[2:], mse_grad[2:])  # later predictions: MSE only
+    torch.testing.assert_close(grad[2:], torch.zeros(2, dtype=torch.float64))  # not dragged
+    assert grad[0] < mse_grad[0] < 0  # the stuck earlier one is lifted, more than by its MSE
+    assert parts["hinge"].detach().item() > 0 and parts["slope"].detach().item() > 0
+
+
+def test_a_stuck_later_prediction_moves_the_earlier_one_only_a_little():
+    """The mirror case: the later prediction stuck 600 s too high. The earlier one settles
+    about weight × H + a small slope share above its target with the run's weights, but is
+    dragged all the way up with the earlier weights (1.0 and 0.5)."""
+
+    def settled(mono, slope):
+        grid = np.arange(800.0, 1400.0, 0.5)
+        losses = []
+        for value in grid:
+            batch = _pair_batch([value], [1300.0], [900.0], [700.0])
+            losses.append(float(pair_loss(*batch, mono, slope)[0]))
+        return grid[int(np.argmin(losses))] - 900.0
+
+    spec = ArmSpec(players=("force",))
+    assert settled(spec.mono_weight, spec.slope_weight) < 160.0  # 100 s hinge + ~45 s slope
+    assert settled(1.0, 0.5) > 390.0
+
+
 def test_predict_unit_matches_the_training_memory(toy_b6):
     _, store, _, features, steps, _ = toy_b6
     inputs = _inputs(steps, features, store.unit_names[:2])
@@ -711,9 +773,10 @@ def test_results_test_read_needs_the_freeze_and_a_complete_study(toy_b6, tmp_pat
 RUN_SPEC = ArmSpec(players=("force", "surface"), seeds=(0, 1), epochs=5)
 
 
-def _fake_run(store, root, bias: dict[str, float], spread: float = 10.0):
+def _fake_run(store, root, bias: dict[str, float], spread: float = 10.0, jitter: float = 0.0):
     """One run's fits as ``fit()`` writes them: predictions = target + the test (or
-    validation) unit's bias ± ``spread`` by seed, so every number of the report is known."""
+    validation) unit's bias ± ``spread`` by seed, so every number of the report is known;
+    ``jitter`` adds independent noise per point (which the context mode can remove)."""
     import pyarrow as pa
 
     seg = store.segments
@@ -725,10 +788,11 @@ def _fake_run(store, root, bias: dict[str, float], spread: float = 10.0):
             for role, unit in (("validation", fold.validation), ("test", fold.test)):
                 mine = np.flatnonzero((seg["unit"] == unit) & seg["is_prediction_point"])
                 offset = bias[unit] + (spread if seed else -spread)
+                noise = np.random.default_rng([index, seed, len(rows)]).normal(0, 1, len(mine))
                 rows.append(mine)
                 units += [unit] * len(mine)
                 roles += [role] * len(mine)
-                values.append(seg["y_s"][mine] + offset)
+                values.append(seg["y_s"][mine] + offset + jitter * noise)
             rows_all = np.concatenate(rows)
             pq.write_table(
                 pa.table(
@@ -766,9 +830,18 @@ def test_the_run_report_keeps_the_test_sealed_before_the_freeze(toy_b6, tmp_path
     assert "test" not in summary and not (out / "test_per_unit.csv").exists()
     assert summary["progress"]["done"] == summary["progress"]["expected"] == 10
     text = (out / "REPORT.md").read_text(encoding="utf-8")
-    assert "Sealed until 2026-12-01" in text and "1 × monotonic penalty" in text
+    assert "Sealed until 2026-12-01" in text and "1/15 × monotonic penalty" in text
     v = {r["unit"]: r for r in summary["validation"]["per_unit"]}
     assert all(v[u]["window_mae"] == pytest.approx(bias[u]) for u in v)
+    # both inference modes on the validation tools; no test numbers anywhere
+    assert summary["inference"]["primary"] == "current"
+    assert "Inference modes: current against context (validation tools)" in text
+    assert summary["validation"]["mode_comparison"]["verdict"] == "neither"  # offsets only
+    lines = (out / "validation_per_unit.csv").read_text(encoding="utf-8").strip().split("\n")
+    assert lines[0].startswith("mode,")
+    assert {line.split(",")[0] for line in lines[1:]} == {"current", "context"}
+    roles = (out / "mode_comparison.csv").read_text(encoding="utf-8").strip().split("\n")[1:]
+    assert roles and all(line.startswith("validation,") for line in roles)
 
 
 def test_the_run_report_with_unseal_and_after_the_freeze(toy_b6, tmp_path):
@@ -796,6 +869,14 @@ def test_the_run_report_with_unseal_and_after_the_freeze(toy_b6, tmp_path):
     text = (out / "REPORT.md").read_text(encoding="utf-8")
     assert "before the design freeze" in text and "with `--unseal`" in text
     assert "| Window MAE (s) |" in text and "### Per test tool" in text
+    # constant offsets: the context mode (exact ageing) changes almost nothing
+    context = {r["unit"]: r for r in summary["test"]["context"]["per_unit"]}
+    assert all(abs(context[u]["window_mae"] - test[u]["window_mae"]) < 5.0 for u in test)
+    assert summary["test"]["mode_comparison"]["verdict"] == "neither"
+    assert "Inference modes: current against context (test tools)" in text
+    trajectories = (out / "test_trajectories.csv").read_text(encoding="utf-8")
+    assert "b6_context_s" in trajectories.split("\n")[0]
+    assert "B6 context" in (out / "error_by_bin.csv").read_text(encoding="utf-8")
     pytest.importorskip("matplotlib")
     for name in ("rul_trajectories.png", "window_mae_per_tool.png", "error_by_rul.png"):
         assert (out / "figures" / name).stat().st_size > 10_000
@@ -807,3 +888,26 @@ def test_the_run_report_with_unseal_and_after_the_freeze(toy_b6, tmp_path):
         json.loads((after / "run_summary.json").read_text())["test"]["unsealed_before_freeze"]
         is False
     )
+
+
+def test_the_mode_comparison_finds_a_real_difference(toy_b6, tmp_path):
+    """Independent noise of 60 s per point: the context mode removes most of it, so the rule
+    finds it better on every tool; REPORT.md and the CSV agree."""
+    from rulfuse.omnifuser_rul.run_report import write_run_report
+
+    _, store, *_ = toy_b6
+    _fake_run(store, tmp_path, {u: 0.0 for u in store.unit_names}, spread=0.0, jitter=60.0)
+    out = write_run_report(store, tmp_path, RUN_SPEC, unseal=True, today=date(2026, 11, 20))
+    summary = json.loads((out / "run_summary.json").read_text())
+    for role in ("validation", "test"):
+        cmp = summary[role]["mode_comparison"]
+        gain = cmp["window_mae_gain"]
+        assert cmp["verdict"] == "context"
+        assert gain["units_better"] == gain["units"] == len(store.unit_names)
+        assert gain["mean_gain_s"] >= 10.0 and gain["ci95"][0] > 0
+        m = cmp["metrics"]["increase_rate"]
+        assert m["context"] < m["current"]  # smoother: fewer rising steps
+    text = (out / "REPORT.md").read_text(encoding="utf-8")
+    assert text.count("**Verdict: the context mode is better.**") == 2
+    rows = (out / "mode_comparison.csv").read_text(encoding="utf-8").strip().split("\n")
+    assert len(rows) == 1 + 2 * len(store.unit_names)  # validation and test, every tool
