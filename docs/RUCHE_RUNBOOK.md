@@ -398,7 +398,7 @@ Each job writes `runs/logs/<name>-<ID>.out` in the repository folder.
 | `usage baselines` | `B0: mae 411.972`, `B1: mae 512.547`, `B2: mae 467.843, … coverage90 0.503, winkler90 5388.189` (plan §2.7) |
 | `offline weights` | Two `ok` lines, each with a non-empty `revision` |
 | `offline weights for B6` | `ok efficientnet_b0 …/torch_cache/hub/checkpoints/efficientnet_b0_rwightman-7f5810bc.pth \| omnifuser 1.1.0 \| torch 2.x+cu126 \| torchvision 0.y+cu126`. `B6 not installed: skipped` means §7.2 ran without the `omnifuser` extra |
-| `tests` | `152 passed, 2 skipped` (154 tests as of 2026-11-07), no failure. The two skips are the comparisons with OmniFuser's records, whose checkout is not on Ruche. The two `weights` tests and the B6 tests (`test_omnifuser_rul.py`, `test_models.py`) must **pass**: they prove offline loading and B6 on this environment. Without OmniFuser installed the B6 module is skipped instead, which is not an error for Stage 3. The B6 tests take a few minutes of CPU |
+| `tests` | `162 passed, 2 skipped` (164 tests as of 2026-11-07), no failure. The two skips are the comparisons with OmniFuser's records, whose checkout is not on Ruche. The two `weights` tests and the B6 tests (`test_omnifuser_rul.py`, `test_models.py`) must **pass**: they prove offline loading and B6 on this environment. Without OmniFuser installed the B6 module is skipped instead, which is not an error for Stage 3. The B6 tests take a few minutes of CPU |
 
 The store signature must equal the laptop's (`rulfuse store-info` on both): the same
 inputs give the same signature, so caches copied home fit the laptop's store.

@@ -12,7 +12,7 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
 | S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
 | S3 Core/adapter refactor, features, feature check | **Code done** (2026-11-05); **Ruche jobs J0-J3 waiting for you** | Refactored store identical to Stage 2's; 111 tests (109 pass, 2 need the weights: they run in J0); ruff and pyright clean; [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) |
-| B6 OmniFuser-RUL (D20) | **Version 4 ready** (2026-11-07): one fixed setting (GRU memory, monotonic penalty), one full run of 10 folds × 3 seeds, then a report with per-tool test results; **waiting for Ruche** after Stage 3's photo decision | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) O12, §14; runbook §12.1-§12.2 |
+| B6 OmniFuser-RUL (D20) | **Version 5 ready** (2026-11-07): one fixed setting (GRU memory; monotonic penalty moving only the earlier prediction), one full run of 10 folds × 3 seeds, then a report with per-tool test results in two inference modes, compared; **waiting for Ruche** after Stage 3's photo decision | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) O9, O12, O13, §7, §14; runbook §12.1-§12.2 |
 | S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
@@ -817,3 +817,103 @@ job; the report takes minutes on `cpu_short`.
 
 Uncommitted changes of the previous step (matching-fit scoring, study options) are included
 if not yet committed.
+
+## B6 version 5: the penalty fix and two inference modes (2026-11-07)
+
+**Your question.** Could the penalty on rising predictions lock later predictions below a
+too-low early one?
+
+- **At prediction time: no.** Each prediction comes from its own inputs. The model never
+  sees its past predictions, and nothing clamps them.
+- **In training: yes, with version 4's loss.** Weight 1.0 acted on both predictions of a
+  pair. When the model could not correct an earlier prediction, the later one settled
+  exactly at the stuck value.
+
+**What you asked for:**
+
+1. Apply the fix and make sure training behaves correctly.
+2. Two inference modes: the current one, and one where previous segments guide the new
+   prediction.
+3. Whether the second mode is valid in production.
+4. A way to compare the two modes.
+
+**What was done:**
+
+- **Training (D22, O9).**
+  - In both temporal terms the later prediction is the fixed reference: detached in
+    `rulfuse.models.losses`, shared with RUL-Fuse.
+  - The weights are 1/15 (hinge) and 0.05 (slope), down from 1.0 and 0.5.
+  - The batch loss is `train.pair_loss`, called by `fit()`.
+- **Inference modes (D23, O13).**
+  - `rulfuse/inference.py` is generic. The context mode ages the running estimate by the
+    cutting time elapsed and blends in each new prediction: a prediction made Δ seconds ago
+    keeps the weight e^(−Δ/120 s). Near the cap, ageing never goes below the new
+    prediction.
+  - `aggregate.with_mode` applies it to each fit's predictions of a tool.
+  - The current mode stays the primary result. Both come from the same fits.
+- **Comparison.**
+  - `run_report.compare_modes`: context − current per metric, with bootstrap intervals; the
+    window-MAE gain with tools better and worse; a two-sided Wilcoxon test.
+  - Verdict rule, fixed in advance: the context mode is better if the gain is at least
+    10 s and its interval lies above 0; the current mode under the mirror condition;
+    otherwise neither.
+  - Outputs: a section in REPORT.md for test and validation, `mode_comparison.csv`, a
+    `mode` column in the per-unit CSVs, both modes in the three figures, and a CLI line.
+- **Production.** The context mode is valid: causal, one number per tool. It needs a reset
+  at a tool change and must persist across machine stops (it ages by cutting time). Its
+  limits:
+  - real sudden changes reach the output with a 120 s time constant;
+  - it removes noise, not a whole-tool bias;
+  - where the model's predictions below the cap fall more slowly than 1 s per s, the
+    context sits up to 120 s lower: pessimistic, and costly on the whole-life MAE.
+
+  B6 plan §7 has the full discussion.
+
+**Verification** (the code `fit()` runs):
+
+| Check | Version 4's loss | Version 5 |
+|---|---|---|
+| Earlier prediction stuck 450 s / 600 s too low → the later one (truth 700 s) | dragged to 450 s / 300 s | stays at 700.0 s |
+| Later prediction stuck 300 s too high → the earlier one | +112.5 s | +73.6 s |
+| Noise the model cannot remove → level shift | 0 | +9.7 to +14.1 s |
+
+- **Toy fits, by hinge weight (15 epochs × 512 pairs).** Mean rise / window MAE / bias:
+  - 0: 2.22 / 32.9 / +27.5 s;
+  - 1/15: 2.11 / 34.6 / +30.5 s;
+  - 0.2: 1.66 / 41.7 / +40.8 s;
+  - 1.0: 0.62 / 62.4 / +62.4 s.
+
+  A strong penalty removes rises at a large accuracy cost; the run's weight costs almost
+  nothing and removes few. The context mode handles rises at inference instead.
+- **Two tests changed, from these measurements.**
+  - The shuffled-target control's limit: 0.8 → 0.7 × the constant predictor, plus at least
+    1.5 × the fit. With the terms off it scores 0.78 ×. The old strong penalty had raised
+    every fit above 0.8 ×, the real one included: 89.6 s against 69.9 s.
+  - The "fewer rises" fit comparison is replaced by a spy inside a real fit: on every
+    batch, the temporal gradient reaches earlier predictions only, with the spec's weights.
+- **The context mode.**
+  - Unit tests: causal; an exact trajectory is unchanged, cap and uneven steps included;
+    it recovers from a low start as e^(−t/T); it removes jitter without sliding off the
+    cap; each fit, tool and role is filtered on its own.
+  - Choices made before any result, on synthetic errors over the real tools' time axes:
+    T = 120 s; the cap rule costs a perfect model 0 s, against 7.4 s for pausing.
+- **Fake run on the real 1 s store.**
+  - B0, B1 and B2 on the test points: 412.0, 512.5 and 467.8 s (plan §2.7).
+  - Window MAE 78.9 → 74.1 s, verdict "neither"; RMSE 88.8 → 79.4 s; whole-life MAE
+    73.1 → 97.5 s (the flat-prediction cost).
+  - The figures were inspected.
+- **Suite.** 164 tests: 162 pass, 2 skip (the Mantis and DINOv2 checkpoint
+  tests, which run in J0); ruff and pyright are clean.
+
+**The run on Ruche is unchanged:** `bash slurm/omnifuser_rul.sh force <admitted types>`.
+No fit exists yet, so no result is affected. The new weights change the fits' settings
+signature, so old fits would not be mixed in.
+
+**Commits (you commit).** Most of version 5 is in your commit e77a0d3 ("Revising Loss
+Function for Training Stability"). What followed it is still uncommitted; suggested
+commit "B6 version 5: test fixes from the toy measurements, docs":
+
+- `tests/test_omnifuser_rul.py`: the control's limit and the in-fit spy test;
+- `rulfuse/inference.py`: the flat-prediction note;
+- `docs/OMNIFUSER_RUL_PLAN.md` (version-5 notes, V-7, V-17, the flat-prediction limit),
+  `docs/RUCHE_RUNBOOK.md` (test count), `PROJECT_LOG.md`.

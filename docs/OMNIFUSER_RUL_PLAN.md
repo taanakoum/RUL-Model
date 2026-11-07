@@ -321,6 +321,14 @@ Its limits:
   tool, so is the context.
 - **Correlated inputs.** Neighbouring predictions share most of their inputs, so
   averaging them gains less than averaging independent ones would.
+- **Flat predictions below the cap.** Once the model predicts more than 100 s below H, the
+  context assumes the RUL falls one second per second. Where the model's predictions fall
+  more slowly, or stay flat, the context settles up to 120 s × (1 − their slope) below
+  them, on the pessimistic side. An example is a model that under-predicts the capped
+  stretch by more than 100 s. This can raise the whole-life MAE, which includes the capped
+  stretch, while the window MAE falls. A fake run on the real store showed both: window MAE
+  78.9 → 74.1 s, whole-life MAE 73.1 → 97.5 s. The decision rule uses the window MAE, the
+  project's headline (plan §10.1); the report shows both.
 
 A learned context, which feeds past predictions into the network, was not chosen. It
 would need a second model trained on its own outputs. That model would be trained on
@@ -442,7 +450,7 @@ way, the ranking is a property of the data, not of one model.
 | V-4 | Targets and weights | Each sample's y equals the store's `y_s`; window flags equal; each tool's weights sum to 1 |
 | V-5 | Baselines on the same points | B0-B2 reproduce 412, 513 and 468 s with this module's sample set |
 | V-6 | Single-stream switch | With `streams="force"`, the output is unchanged when the photos change, and the other way round; `none` ignores both |
-| V-7 | Learns | On the toy adapter, the window MAE is well below the mean predictor's; a shuffled-target control collapses to it |
+| V-7 | Learns | On the toy adapter, the window MAE ends below 0.7 × the constant predictor's; a shuffled-target control stays above 0.7 × and above 1.5 × the real fit (version 5; the margin was 0.8, see §14) |
 | V-8 | Determinism and resume | The same seed gives the same predictions on the CPU; an interrupted fit resumes to the same result |
 | V-9 | Test seal | `aggregate` refuses test scores before the freeze without `--after-freeze` |
 | V-10 | Transfer contract | The core imports nothing from `omnifuser_rul`; photo kinds come from the store, never hard-coded (plan P22) |
@@ -451,7 +459,7 @@ way, the ranking is a property of the data, not of one model.
 | V-14 | Input dimensions (O7) | Windows are (B, 96, 31) force vectors and (B, 96) photo rows whatever S; OmniFuser's parameter count is the same at 10 s and finer steps |
 | V-15 | Memory causality (O8) | The memory state at step t is unchanged when any step after t changes; only complete blocks are read; padding is never averaged; a rise shared by all inputs registers |
 | V-16 | Switches reach the memory (O8) | With force, photos or usage off, changing that input changes neither the window output nor the memory |
-| V-17 | Temporal loss (O9) | The hinge is zero for non-increasing pairs and lifts the earlier prediction of a rising pair; the slope term is zero when the decrease equals Δτ; **neither term reaches the later prediction**: in `pair_loss`, the later half's gradient equals the MSE's, so a stuck earlier prediction cannot drag a later one; a stuck later prediction moves the earlier one by at most about 1/15 × H plus a small slope share; on the toy, the same fits without the terms rise more |
+| V-17 | Temporal loss (O9) | The hinge is zero for non-increasing pairs and lifts the earlier prediction of a rising pair; the slope term is zero when the decrease equals Δτ; **neither term reaches the later prediction**: in `pair_loss`, the later half's gradient equals the MSE's, so a stuck earlier prediction cannot drag a later one; a stuck later prediction moves the earlier one by at most about 1/15 × H plus a small slope share; inside a real toy fit, every batch's temporal gradient reaches earlier predictions only, with the spec's weights |
 | V-18 | Scoring only the right fits | Scores use only fits whose `fit.json` records the arm's settings (a partly rerun arm never mixes) |
 | V-19 | Inference modes (O13) | The context mode is causal, leaves an exact trajectory unchanged (cap and uneven steps included), recovers from a low start as e^(−t/T), removes jitter without sliding off the cap; each fit, unit and role is filtered on its own; the report's comparison finds no difference for constant offsets and finds the context mode better for independent noise |
 
@@ -719,3 +727,88 @@ results for a report. The run uses the GRU memory and the loss with the monotoni
 - **Submission.** A dry run of `slurm/omnifuser_rul.sh` with a fake `sbatch` submits
   `b6-train`, then `b6-report` with `afterok`. Options after `--` reach both jobs, and an
   excluded photo type is refused.
+
+### Version 5 (2026-11-07): the penalty fix and two inference modes
+
+**Your question.** Could the penalty on rising predictions trap the model? If its first
+predictions are too low, later ones might be unable to come back up.
+
+- **At prediction time: no.** Each prediction is computed from its own inputs. The model
+  never sees its own past predictions, and nothing clamps them.
+- **In training: yes, with version 4's loss.** The penalty pushed both predictions of a
+  rising pair towards each other, with weight 1.0. When the model could not correct an
+  earlier prediction, the later one settled exactly at that stuck value (table below).
+
+**The fix (O9):**
+
+- **The later prediction is the reference.** In both temporal terms it is detached, so the
+  terms move only the earlier prediction.
+- **Smaller weights:** 1/15 on the hinge and 0.05 on the slope term. The hinge weight acts
+  as a tolerance: it can hold a prediction at most about 1/15 × H = 100 s from what the MSE
+  wants. With the detach the weights must stay small. The hinge then only lifts, so noise
+  the model cannot remove shifts the level up: about +10 to +15 s at these weights, +160 to
+  +215 s at 1.0.
+
+**Your second request (O13).** A second inference mode, in which the tool's earlier
+predictions guide the new one, and a way to compare the two modes (§7). It is computed from
+the same 30 fits, so nothing is trained twice.
+
+**What changed:**
+
+| Part | Version 5 |
+|---|---|
+| Temporal loss | `rulfuse.models.losses`: the later prediction is detached in both terms (shared with RUL-Fuse). `train.pair_loss` is a batch's loss, called by `fit()`. `ArmSpec` and CLI defaults: 1/15 and 0.05 |
+| Inference | `rulfuse/inference.py` (generic): `context_filter`, `apply_mode`, T = 120 s, cap margin H/15. `aggregate.with_mode` applies a mode to each fit's predictions of one unit and role, in time order |
+| Report | Both modes per role. `compare_modes` applies the rule fixed in advance. New `mode_comparison.csv`; a `mode` column in the per-unit CSVs; `b6_context_s` in the trajectories; `B6 context` rows in `error_by_bin.csv`. All three figures show both modes, in categorical slots 1-3. The CLI prints both modes and the verdict |
+| Tests | `tests/test_inference.py` (6). In `tests/test_omnifuser_rul.py`: the training loss moves only the earlier prediction; a stuck later prediction moves the earlier one only a little; the CLI and spec defaults agree; inside a real fit, every batch's temporal gradient reaches earlier predictions only; the mode comparison finds a real difference; the report tests cover both modes |
+
+**Choices made before any B6 result:**
+
+- **T = 120 s.** On the real tools' time axes with synthetic errors:
+  - jitter: 46.6 → 8.5 s window MAE;
+  - errors that change pass by pass: 72.6 → 45.3 s;
+  - a constant per-tool bias: not removed (111.8 → 113.8 s);
+  - a mix of all four: 142.8 → 133.5 s, the best of T = 30-480 s for the mix.
+- **The cap rule.** Near the cap, ageing never goes below the new prediction. Pausing the
+  ageing instead cost a perfect model 7.4 s of window MAE at T = 120 s; this rule costs 0
+  at every T. Ageing always drifted on the capped stretch (110 s there).
+
+**Verification.** Every check uses the code `fit()` runs (`pair_loss`, `sample_pairs`).
+
+| Check | Version 4's loss (1.0, 0.5, both predictions) | Version 5 (1/15, 0.05, earlier only) |
+|---|---|---|
+| Earlier prediction stuck 450 s too low (truth 900 → 700 s, in a 16-pair batch) | later settles at 450 s (250 s too low) | later stays at 700.0 s |
+| Earlier stuck 600 s too low | later at 300 s (400 s too low) | later stays at 700.0 s |
+| Later prediction stuck 300 s too high | earlier 112.5 s too high | earlier 73.6 s too high |
+| Level shift from noise the model cannot remove (sd 30 s) | 0 | +9.7 s (smooth noise) to +14.1 s (white) |
+
+Toy fits (one fold, 15 epochs × 512 pairs, 2 seeds):
+
+| Hinge weight | Mean rise | Window MAE | Bias |
+|---|---|---|---|
+| 0 | 2.22 s | 32.9 s | +27.5 s |
+| 1/15 (the run) | 2.11 s | 34.6 s | +30.5 s |
+| 0.2 | 1.66 s | 41.7 s | +40.8 s |
+| 1.0 | 0.62 s | 62.4 s | +62.4 s |
+
+A stronger penalty removes more rises, but costs accuracy through the late bias. The run's
+weight removes few rises in training, at almost no cost. The context mode removes rises at
+inference instead.
+
+**Two tests changed after the toy measurements:**
+
+- **The shuffled-target control.** Its limit fell from 0.8 to 0.7 × the constant predictor;
+  the fit must still be below 0.7 × and the control at least 1.5 × the fit. With the terms
+  off the control scores 0.78 ×. Only version 4's strong penalty had kept every fit above
+  0.8 ×, the real fit included (89.6 s against 69.9 s).
+- **The "fewer rises" fit comparison.** It is replaced by the check inside a real fit
+  above: at the run's weights the effect is too small to see in a 5-epoch toy fit.
+
+**Context mode, fake run on the real store** (per-tool bias, noise per pass and per step):
+
+- B0, B1 and B2 on the test points: 412.0, 512.5 and 467.8 s, as plan §2.7.
+- Window MAE 78.9 s current, 74.1 s context (gain 4.8 s, interval −1.3 to 12.0 s). Verdict:
+  neither mode is clearly better.
+- RMSE 88.8 → 79.4 s; rising steps 0.454 → 0.365.
+- Whole-life MAE 73.1 → 97.5 s: the flat-prediction cost described in §7.
+- The figures were rendered and inspected.

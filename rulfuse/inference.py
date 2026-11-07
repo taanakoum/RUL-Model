@@ -32,6 +32,13 @@ Properties (tests/test_inference.py):
   drift down by about T; pausing the ageing instead would make it lag by up to T when the
   RUL starts falling. With it, an exact trajectory is reproduced exactly, cap included.
 
+Known cost: once the model predicts more than ``cap_margin_s`` below H, the context assumes
+the RUL falls one second per second. Where the model's predictions fall more slowly, or
+stay flat (a model that under-predicts the capped stretch by more than H/15, say), the
+output settles up to T × (1 − their slope) below them, at most T, on the pessimistic side.
+This can raise the whole-life MAE, which includes the capped stretch, while the window MAE
+falls (seen on synthetic data); the comparison rule uses the window MAE, the headline.
+
 Constants (fixed before any B6 or RUL-Fuse result, so comparing the two modes on the
 validation tools is as fair as on the test tools): T = 120 s and the cap margin H/15. On
 the real tools' time axes with synthetic errors, T = 120 s cut the window MAE of jitter

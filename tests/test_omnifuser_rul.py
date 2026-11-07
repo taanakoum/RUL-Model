@@ -317,6 +317,10 @@ def _best(folder, fold="fold-01", seed="seed-0"):
 
 
 def test_a_fit_learns_the_toy_rul_and_a_shuffled_control_does_not(toy_b6, toy_fits, tmp_path):
+    """The fit ends below 0.7 × the constant predictor's MAE; the same fit on shuffled
+    targets stays above it (and at least 1.5 × the real fit). The control's margin was 0.8
+    until 2026-11-07: with the temporal terms off it scores 0.78 ×, and only the old strong
+    penalty (1.0 and 0.5) had pushed every fit, the real one too, above that line."""
     _, store, _, features, steps, root = toy_b6
     spec, folder = toy_fits
     fold = leave_one_unit_out(store.unit_names)[0]
@@ -347,7 +351,7 @@ def test_a_fit_learns_the_toy_rul_and_a_shuffled_control_does_not(toy_b6, toy_fi
         device="cpu",
         log=quiet,
     )
-    assert _best(control) > 0.8 * constant
+    assert _best(control) > 0.7 * constant and _best(control) > 1.5 * _best(folder)
 
 
 def test_predictions_cover_every_point_with_the_grid_flag_and_runs_resume(toy_b6, toy_fits):
@@ -419,18 +423,34 @@ def test_the_same_seed_gives_the_same_predictions(toy_b6, tmp_path):
     np.testing.assert_array_equal(read(a), read(b))
 
 
-def test_the_temporal_terms_reduce_rising_predictions(toy_b6, tmp_path):
-    """The monotonic hinge and the slope term, against the same fit without them (2 seeds)."""
+def test_inside_a_fit_the_temporal_terms_move_only_earlier_predictions(
+    toy_b6, tmp_path, monkeypatch
+):
+    """A real fit, with a spy on every batch's loss: the temporal terms (loss − MSE) have a
+    gradient on the earlier predictions only, never on the later ones, and use the spec's
+    weights. (An end-to-end "fewer rises" check cannot see the run's small weights in a
+    5-epoch toy fit; PROJECT_LOG.md 2026-11-07 has the measurement.)"""
+    from rulfuse.omnifuser_rul import train
+
     _, store, _, features, steps, _ = toy_b6
-    rates = {}
-    on = ArmSpec(players=("force", "surface"), epochs=5, seeds=(0, 1), pairs_per_epoch=QUICK_PAIRS)
-    for name, spec in (("on", on), ("off", replace(on, mono_weight=0.0, slope_weight=0.0))):
-        folder = run_arm(
-            store, steps, features, KINDS, spec, tmp_path / name, folds=[1], device="cpu", log=quiet
+    real, seen = train.pair_loss, []
+
+    def spy(prediction, target, weight, elapsed, paired, mono_weight, slope_weight):
+        loss, parts = real(prediction, target, weight, elapsed, paired, mono_weight, slope_weight)
+        (grad,) = torch.autograd.grad(loss - parts["mse"], prediction, retain_graph=True)
+        k = len(prediction) // 2
+        seen.append(
+            (float(grad[k:].abs().max()), float(grad[:k].abs().max()), mono_weight, slope_weight)
         )
-        unit = aggregate.score_arm(store, folder, "validation")["per_unit"]
-        rates[name] = np.mean([u["mean_increase_s"] for u in unit.values()])
-    assert rates["on"] < rates["off"]
+        return loss, parts
+
+    monkeypatch.setattr(train, "pair_loss", spy)
+    spec = ArmSpec(players=("force", "surface"), epochs=2, seeds=(0,), pairs_per_epoch=QUICK_PAIRS)
+    run_arm(store, steps, features, KINDS, spec, tmp_path, folds=[1], device="cpu", log=quiet)
+    assert len(seen) == 2 * QUICK_PAIRS // (spec.batch_size // 2)  # every batch of both epochs
+    assert all(later == 0.0 for later, *_ in seen)  # never on a later prediction
+    assert sum(earlier > 0 for _, earlier, *_ in seen) > len(seen) / 2  # they do act
+    assert {(m, w) for *_, m, w in seen} == {(spec.mono_weight, spec.slope_weight)}
 
 
 def test_the_loss_defaults_and_the_cli_agree():
@@ -486,7 +506,7 @@ def test_a_stuck_later_prediction_moves_the_earlier_one_only_a_little():
         losses = []
         for value in grid:
             batch = _pair_batch([value], [1300.0], [900.0], [700.0])
-            losses.append(float(pair_loss(*batch, mono, slope)[0]))
+            losses.append(pair_loss(*batch, mono, slope)[0].detach().item())
         return grid[int(np.argmin(losses))] - 900.0
 
     spec = ArmSpec(players=("force",))
