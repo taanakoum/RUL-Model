@@ -67,7 +67,7 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D17 | Built to transfer | No PCA and no dataset-specific physics features inside the model. Frozen embeddings enter through a LayerNorm and a learned, shared low-rank projection. Channels are a set with descriptor embeddings. Only generic level descriptors complement the encoder (§6.2, §6.10) | You (2026-11-04): a versatile backbone |
 | D18 | Core and adapter | Everything dataset-specific lives in one **adapter** that turns a dataset into generic units, recordings and observations with a failure time per unit. The **core** (segments, targets, features, tokens, model, training, calibration, evaluation) never refers to passes, runs, blocks, named photo types or flank wear (§6.11) | You (2026-11-04) |
 | D19 | Seeds | **3 seeds everywhere:** gate decisions and the final model are 3-seed ensembles | You (2026-11-04) |
-| D20 | OmniFuser baseline | **B6, OmniFuser-RUL:** the OmniFuser architecture (frozen EfficientNet-B0 photos, C2F fusion, an RUL head) on this project's targets, processing, folds, weights, selection and metrics. A separate model: no RUL-Fuse decision reads it. Test reads follow D15. Plan: `docs/OMNIFUSER_RUL_PLAN.md` Version 3 (2026-11-06): 1 s steps scored on the 10 s points, a GRU memory and the temporal loss (D21, D22) | You (2026-11-05, 2026-11-06) |
+| D20 | OmniFuser baseline | **B6, OmniFuser-RUL:** the OmniFuser architecture (frozen EfficientNet-B0 photos, C2F fusion, an RUL head) on this project's targets, processing, folds, weights, selection and metrics. A separate model: no RUL-Fuse decision reads it. Test reads follow D15. Plan: `docs/OMNIFUSER_RUL_PLAN.md` Version 3 (2026-11-06): 1 s steps scored on the 10 s points, a GRU memory and the temporal loss (D21, D22). **Version 4 (2026-11-07): one configuration trained once (10 folds × 3 seeds) and reported; no modality study and no comparison of settings** | You (2026-11-05, 2026-11-06) |
 | D21 | Memory | **A causal recurrent memory of each unit's whole history** (`rulfuse.models.memory.CausalMemory`, a GRU over block means of the step inputs; step t reads only complete blocks). B6 uses it now. In RUL-Fuse, F1 and F0's signal expert concatenate its state (over the force tokens, block 1) with their output at every force token before the head; Gate 2b reports a no-memory control (§7.5). F1's attention already reaches the whole history; the memory adds a running summary that is cheap at any length | You (2026-11-06): each new segment uses the information of all previous ones |
 | D22 | Rising predictions | **Penalized in the loss of both models** (`rulfuse.models.losses`): λ_mono · relu(μ_later − μ_earlier) on pairs of points of one unit (RUL can only fall), with the slope-consistency term where the target is below the cap; λ_mono = 1.0 and λ_cons = 0.5 on y/H in both models (§6.7) | You (2026-11-06) |
 
@@ -1152,7 +1152,7 @@ Every table shows these, in seconds.
 | B3 | Learned usage-only model: the chosen head on U features, no trajectory augmentation | Yes | A learned B2; v(∅) candidate (§11) |
 | B4 | Ridge on the level descriptors (absolute and relative; mean of the last 3 segments) + usage features → capped RUL | Yes | A generic condition-monitoring regression |
 | B5 | The image HI readout (here the tool photos' wear readout) + degradation extrapolation (F5 machinery, §6.5) | Yes | "Read the image and extrapolate" |
-| B6 | OmniFuser-RUL (D20): force + admitted photo types + usage through OmniFuser's encoders and C2F fusion; 3-seed ensemble, points only. B6-FT (force + tool photo) as a secondary row | Yes | What a published multimodal fusion architecture achieves on the same task and inputs |
+| B6 | OmniFuser-RUL (D20): force + admitted photo types + usage through OmniFuser's encoders and C2F fusion, a GRU memory and the loss with the monotonic penalty; one full run, 3-seed ensemble, points only | Yes | What a published multimodal fusion architecture achieves on the same task and inputs |
 | R1 | Oracle: the *measured* HI, causally isotonic-smoothed, + the same extrapolation | No | Upper reference: what a perfect image reader would give |
 
 **Degradation extrapolation (B5, R1)** (generic, for any dataset with an HI).
@@ -1628,11 +1628,10 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J11 | 8 | Shapley: 7 coalitions × 10 folds (15 if the workpiece passes) | 70 (150) | 210 (450) | 5 (11) GPU-h |
 | J12 | 8 | Sensitivity tier 1 (5 refit arms) / tier 2 (up to 9 arms + features) | 50 / 90 | 150 / 270 | 4 / 8 GPU-h |
 | J13 | 9 | Report | 1 | – | 15 min |
-| B6-P | 3 (after J3) | B6 OmniFuser-RUL pilot and caches (`b6-pilot`, `b6-prepare`) | 2 | 1 | 30 min |
-| B6-S | 5-6 | B6 study (version 3): 13 arms × 10 folds × 3 seeds (`slurm/omnifuser_rul.sh`; docs/OMNIFUSER_RUL_PLAN.md §8) | 13 | 390 | about 20-40 GPU-h |
-| B6-R | 6, and after 2026-12-01 | B6 results (`slurm/omnifuser_results.sh`; validation, then the sealed test read) | 1-2 | – | 5 min each |
+| B6 | after J3 | B6 OmniFuser-RUL, the full run: caches, then 10 folds × 3 seeds (`b6-train`, `slurm/omnifuser_rul.sh`) | 1 | 30 | 1.5-3 GPU-h |
+| B6-R | after B6, and from 2026-12-01 | B6's report (`b6-report`, `slurm/omnifuser_results.sh`; test results from the freeze or with `--unseal`) | 1 | – | 5 min |
 
-The total is about 40-50 A100-hours for RUL-Fuse (the Stage-3 feature job adds under one), plus about 20-40 for baseline B6 (its pilot measures it; the pair budget can be halved). Submit arrays in the evening; run
+The total is about 40-50 A100-hours for RUL-Fuse (the Stage-3 feature job adds under one), plus 1.5-3 for baseline B6's single run. Submit arrays in the evening; run
 `status.sh` each morning.
 
 ### 16.5 Safe practice

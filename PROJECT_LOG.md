@@ -4,7 +4,7 @@ The running record of what was built, how it was checked, what was decided and w
 plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 [PLAN_REVIEW.md](PLAN_REVIEW.md). Newest stage last; the status table is kept current.
 
-## Status at a glance (updated 2026-11-06)
+## Status at a glance (updated 2026-11-07)
 
 | Stage | State | Evidence |
 |---|---|---|
@@ -12,7 +12,7 @@ plan is [PROJECT_PLAN.md](PROJECT_PLAN.md) (version 2) and its review is
 | S1 Data audit and RUL EDA | **Done** (2026-11-04) | [docs/EDA_RUL.md](docs/EDA_RUL.md); `scripts/eda_rul.py` (47-63 s); 55 tests pass |
 | S2 Data pipeline | **Done** (2026-11-04) | Segment store `8d2b69c23453`; `scripts/validate_stage2.py`; [docs/END_TO_END.md](docs/END_TO_END.md); 78 tests pass |
 | S3 Core/adapter refactor, features, feature check | **Code done** (2026-11-05); **Ruche jobs J0-J3 waiting for you** | Refactored store identical to Stage 2's; 111 tests (109 pass, 2 need the weights: they run in J0); ruff and pyright clean; [docs/RUCHE_RUNBOOK.md](docs/RUCHE_RUNBOOK.md) |
-| B6 OmniFuser-RUL (D20) | **Version 3 done and verified** (2026-11-06): 1 s steps scored on the 10 s points, GRU memory, temporal loss, 13 arms; **ready for Ruche** once Stage 3's photo decision exists | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) §14; runbook §12.1-§12.2; 151 tests (149 pass; 2 need the weights); real-data 1 s fit runs |
+| B6 OmniFuser-RUL (D20) | **Version 4 ready** (2026-11-07): one fixed setting (GRU memory, monotonic penalty), one full run of 10 folds × 3 seeds, then a report with per-tool test results; **waiting for Ruche** after Stage 3's photo decision | [docs/OMNIFUSER_RUL_PLAN.md](docs/OMNIFUSER_RUL_PLAN.md) O12, §14; runbook §12.1-§12.2 |
 | S4-S9 | Not started | – |
 
 **Answered 2026-11-04:**
@@ -743,3 +743,77 @@ is one commit, "B6 version 3: matching-fit scoring, study options, docs":
 - `tests/test_models.py`, `tests/test_omnifuser_rul.py`;
 - `docs/OMNIFUSER_RUL_PLAN.md`, `docs/RUCHE_RUNBOOK.md`, `PROJECT_PLAN.md`,
   `PROJECT_LOG.md`.
+
+
+---
+
+## B6 version 4: one full run and a report (2026-11-07)
+
+**Your request:** no experiments on the OmniFuser implementation, and no switching of
+settings for comparison (for example GRU against LSTM). Choose one setting, run one full
+training, extract meaningful test results for a report, and include the loss with the
+monotonic penalty. Update the runbook.
+
+**The setting** (fixed; decision O12 of the B6 plan):
+
+| Part | Value |
+|---|---|
+| Inputs | Force (7 level descriptors × 4 channels, a signal flag), every photo type admitted by Stage 3, usage |
+| Steps and points | 1 s segments, 96-step windows; scored on the project's 10 s points (RUL ≤ 1,500 s) |
+| Model | OmniFuser v1.1's encoder + a **GRU** memory (hidden 64, 10-step blocks) + a linear head |
+| Loss | Point-weighted MSE + **1.0 × monotonic penalty** + 0.5 × slope consistency |
+| Training | Adam 1e-4, 30 epochs of 2,048 pairs, 10 folds × 3 seeds = 30 fits |
+
+**Built:**
+
+- **Report command and figures.** `rulfuse omnifuser-report`
+  (`rulfuse/omnifuser_rul/run_report.py`). It writes `REPORT.md`, `run_summary.json`, the
+  CSV tables and three figures. The figures follow the chart guidance: the reference
+  palette, B6 in blue, B2 in orange, truth in ink.
+- **Report metrics** in `rulfuse/metrics.py`: the asymmetric score of plan §10.2, the late
+  and early rates, the share within ±20 %, error by true-RUL range, and a bootstrap
+  interval over tools.
+- **One submission.** `slurm/omnifuser_rul.sh` now submits one training job (`b6-train`)
+  and the report job (`b6-report`) chained after it with `afterok`. It keeps the Stage-3
+  guards.
+- **Report job body.** `slurm/omnifuser_results.sh` runs the report and packs the archive.
+- **Documentation.**
+  - The runbook's §12.1-§12.2 are rewritten for the single run, as are the job table, the
+    cheat sheet, the troubleshooting rows and §13.
+  - §7.2 installs `eda` for the figures.
+  - The B6 plan reaches version 4 (O12; §8 marked not run).
+  - The project plan's D20, its B6 baseline row and the job table are updated.
+
+**Test results and the seal.** You decided earlier (O3, D15) that B6's test scores stay
+sealed until the design freeze on 2026-12-01. The report keeps that by default: before the
+freeze it has the run and the validation results. From 2026-12-01 the same report includes
+the test results. To read them earlier for your report, run it with `--unseal`; it then
+opens with a note recording the date. That choice is yours.
+
+**Verification:**
+
+- **Report tests.** A fake run checks every number: per-tool MAE and bias, the seed spread,
+  B2 on the same points, the gain and tools improved, error by range, the seal, `--unseal`,
+  the read after the freeze, and the figures.
+- **Metrics by hand.** The new metrics are checked against hand computations.
+- **Real store.** On the real 1 s store, the report's baselines are B2 467.8 s, B0 412.0 s
+  and B1 512.5 s, exactly plan §2.7.
+- **Figures.** They were rendered and inspected.
+- **Submission.** A dry run with a fake `sbatch` submits 2 jobs, chained, with the options
+  passed to both.
+- **Suite.** 154 tests: 152 pass, 2 skip (the Mantis and DINOv2 checkpoint tests, which
+  run in J0); ruff and pyright are clean.
+
+**Cost:** 30 fits at an expected 3-6 minutes each, about 1.5-3 GPU-hours, in one 8-hour
+job; the report takes minutes on `cpu_short`.
+
+**Suggested commit (you commit):** "B6 version 4: one full run and its report":
+
+- `rulfuse/omnifuser_rul/run_report.py`, `rulfuse/metrics.py`, `rulfuse/cli.py`;
+- `tests/test_metrics.py`, `tests/test_omnifuser_rul.py`;
+- `slurm/omnifuser_rul.sh`, `slurm/omnifuser_results.sh`;
+- `docs/RUCHE_RUNBOOK.md`, `docs/OMNIFUSER_RUL_PLAN.md`, `PROJECT_PLAN.md`,
+  `PROJECT_LOG.md`.
+
+Uncommitted changes of the previous step (matching-fit scoring, study options) are included
+if not yet committed.

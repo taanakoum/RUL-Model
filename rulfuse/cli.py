@@ -302,6 +302,35 @@ def cmd_omnifuser_results(args: argparse.Namespace) -> int:
 B6_SEGMENT_S = 1.0  # O7: OmniFuser's native 1 s step (docs/OMNIFUSER_RUL_PLAN.md)
 
 
+def cmd_omnifuser_report(args: argparse.Namespace) -> int:
+    """The report of B6's single full run (docs/OMNIFUSER_RUL_PLAN.md version 4)."""
+    import json as _json
+
+    from rulfuse.core.store import SegmentStore, build_segment_store
+    from rulfuse.omnifuser_rul.run_report import write_run_report
+
+    store = SegmentStore.open(build_segment_store(_dataset(args)))
+    spec = _arm_spec(args, args.players)
+    out = write_run_report(store, args.runs_root, spec, unseal=args.unseal, out=args.out)
+    res = _json.loads((out / "run_summary.json").read_text(encoding="utf-8"))
+    prog = res["progress"]
+    print(f"run {spec.name}: {prog['done']}/{prog['expected']} fits")
+    v = res["validation"]["summary"]
+    b2v = v["B2_window_mae"]["mean"]
+    print(f"validation window MAE {v['window_mae']['mean']:.1f} s (B2 {b2v:.1f} s)")
+    if "test" in res:
+        t = res["test"]["summary"]
+        b2t = t["B2_window_mae"]["mean"]
+        print(
+            f"test window MAE {t['window_mae']['mean']:.1f} s (B2 {b2t:.1f} s); "
+            f"better than B2 on {t['vs_B2']['units_better']}/{t['vs_B2']['units']} tools"
+        )
+    else:
+        print("test results sealed until the design freeze (2026-12-01); --unseal reads them now")
+    print(f"wrote {out / 'REPORT.md'}")
+    return 0
+
+
 def _add_omnifuser_options(p: argparse.ArgumentParser, players: bool = True) -> None:
     _add_dataset_options(p, segment_s=B6_SEGMENT_S)
     if players:
@@ -436,6 +465,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--after-freeze", action="store_true", help="also score the test units (D15)")
     p.add_argument("--out", type=Path, default=None)
     p.set_defaults(func=cmd_omnifuser_analyse)
+
+    p = sub.add_parser("omnifuser-report", help="B6 OmniFuser-RUL: report of the full run")
+    _add_omnifuser_options(p)
+    p.add_argument(
+        "--unseal", action="store_true", help="include test results before the freeze (logged)"
+    )
+    p.add_argument(
+        "--out", type=Path, default=None, help="default: <runs-root>/<store>/<arm>/report"
+    )
+    p.set_defaults(func=cmd_omnifuser_report)
 
     p = sub.add_parser(
         "omnifuser-results", help="B6 OmniFuser-RUL: progress, scores, choices, RESULTS.md"

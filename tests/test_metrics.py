@@ -30,3 +30,20 @@ def test_check_resources_raises_when_too_busy():
     assert status.threads >= 1
     with pytest.raises(ResourcesBusy):
         check_resources(min_memory_mb=1e12)
+
+
+def test_report_metrics_by_hand():
+    y = np.array([100.0, 200.0, 300.0, 400.0])
+    p = np.array([250.0, 150.0, 300.0, 420.0])  # +150 (late), -50, 0, +20
+    assert M.late_rate(y, p, 100.0) == pytest.approx(0.25)
+    assert M.early_rate(y, p, 40.0) == pytest.approx(0.25)
+    assert M.relative_accuracy(y, p, 0.2) == pytest.approx(0.5)  # 250 vs 100 and 150 vs 200 miss
+    d = (p - y) / 1500.0
+    expected = np.mean(np.where(d < 0, np.exp(-d / 0.17) - 1, np.exp(d / 0.13) - 1))
+    assert M.phm_score(y, p, 1500.0) == pytest.approx(expected)
+    assert M.phm_score(y, y + 100, 1500.0) > M.phm_score(y, y - 100, 1500.0)  # late costs more
+    bins = M.error_by_bin(y, p, np.array([0.0, 250.0, 500.0]))
+    assert [b["points"] for b in bins] == [2, 2]
+    assert bins[0]["mae"] == pytest.approx(100.0) and bins[1]["bias"] == pytest.approx(10.0)
+    lo, hi = M.bootstrap_mean_ci(np.array([1.0, 2.0, 3.0, 4.0]))
+    assert lo < 2.5 < hi and (lo, hi) == M.bootstrap_mean_ci(np.array([1.0, 2.0, 3.0, 4.0]))

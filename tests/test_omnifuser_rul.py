@@ -703,3 +703,107 @@ def test_results_test_read_needs_the_freeze_and_a_complete_study(toy_b6, tmp_pat
     (missing / "fit.json").unlink()  # one fit lost: no test read on an incomplete study
     with pytest.raises(IncompleteStudy):
         write_results(store, tmp_path, players, base, after_freeze=True, today=date(2026, 12, 1))
+
+
+# ----------------------------------------------------------------------------- the full run
+
+
+RUN_SPEC = ArmSpec(players=("force", "surface"), seeds=(0, 1), epochs=5)
+
+
+def _fake_run(store, root, bias: dict[str, float], spread: float = 10.0):
+    """One run's fits as ``fit()`` writes them: predictions = target + the test (or
+    validation) unit's bias ± ``spread`` by seed, so every number of the report is known."""
+    import pyarrow as pa
+
+    seg = store.segments
+    for index, fold in enumerate(leave_one_unit_out(store.unit_names), start=1):
+        for seed in RUN_SPEC.seeds:
+            out = arm_dir(root, store, RUN_SPEC) / f"fold-{index:02d}" / f"seed-{seed}"
+            out.mkdir(parents=True, exist_ok=True)
+            rows, units, roles, values = [], [], [], []
+            for role, unit in (("validation", fold.validation), ("test", fold.test)):
+                mine = np.flatnonzero((seg["unit"] == unit) & seg["is_prediction_point"])
+                offset = bias[unit] + (spread if seed else -spread)
+                rows.append(mine)
+                units += [unit] * len(mine)
+                roles += [role] * len(mine)
+                values.append(seg["y_s"][mine] + offset)
+            rows_all = np.concatenate(rows)
+            pq.write_table(
+                pa.table(
+                    {
+                        "row": rows_all,
+                        "unit": units,
+                        "role": roles,
+                        "fold": np.full(len(roles), index),
+                        "seed": np.full(len(roles), seed),
+                        "on_grid": np.ones(len(roles), dtype=bool),
+                        "prediction_s": np.concatenate(values),
+                    }
+                ),
+                out / "predictions.parquet",
+            )
+            record = {
+                "fold": index,
+                "seed": seed,
+                "selected_epoch": 3,
+                "validation_mae_s": [9.0, 8.0, 7.0, 7.5, 7.6],
+                "seconds": 20.0,
+                "spec": RUN_SPEC.signature(),
+            }
+            (out / "fit.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_the_run_report_keeps_the_test_sealed_before_the_freeze(toy_b6, tmp_path):
+    from rulfuse.omnifuser_rul.run_report import write_run_report
+
+    _, store, *_ = toy_b6
+    bias = {u: 20.0 + 5 * i for i, u in enumerate(store.unit_names)}
+    _fake_run(store, tmp_path, bias)
+    out = write_run_report(store, tmp_path, RUN_SPEC, today=date(2026, 11, 20))
+    summary = json.loads((out / "run_summary.json").read_text())
+    assert "test" not in summary and not (out / "test_per_unit.csv").exists()
+    assert summary["progress"]["done"] == summary["progress"]["expected"] == 10
+    text = (out / "REPORT.md").read_text(encoding="utf-8")
+    assert "Sealed until 2026-12-01" in text and "1 × monotonic penalty" in text
+    v = {r["unit"]: r for r in summary["validation"]["per_unit"]}
+    assert all(v[u]["window_mae"] == pytest.approx(bias[u]) for u in v)
+
+
+def test_the_run_report_with_unseal_and_after_the_freeze(toy_b6, tmp_path):
+    from rulfuse.omnifuser_rul.run_report import write_run_report
+
+    _, store, *_ = toy_b6
+    bias = {u: 20.0 + 5 * i for i, u in enumerate(store.unit_names)}
+    _fake_run(store, tmp_path, bias)
+    out = write_run_report(store, tmp_path, RUN_SPEC, unseal=True, today=date(2026, 11, 20))
+    summary = json.loads((out / "run_summary.json").read_text())
+    test = {r["unit"]: r for r in summary["test"]["per_unit"]}
+    b2 = aggregate.b2_by_unit(store, "test")
+    assert set(test) == set(store.unit_names)  # every tool once, as its fold's test tool
+    for unit, r in test.items():
+        assert r["window_mae"] == pytest.approx(bias[unit])  # the mean of the seeds
+        assert r["window_bias"] == pytest.approx(bias[unit])
+        assert r["B2_window_mae"] == pytest.approx(b2[unit])  # B2 on the same points
+        assert r["seed_sd"] == pytest.approx(np.std([bias[unit] - 10, bias[unit] + 10], ddof=1))
+        assert r["late_rate"] == 0.0  # every bias is below 100 s
+    t = summary["test"]["summary"]
+    gains = [b2[u] - bias[u] for u in test]
+    assert t["vs_B2"]["mean_gain_s"] == pytest.approx(np.mean(gains))
+    assert t["vs_B2"]["units_better"] == sum(g > 0 for g in gains)
+    assert sum(b["points"] for b in t["error_by_bin"]["B6"]) == t["pooled"]["points"]
+    text = (out / "REPORT.md").read_text(encoding="utf-8")
+    assert "before the design freeze" in text and "with `--unseal`" in text
+    assert "| Window MAE (s) |" in text and "### Per test tool" in text
+    pytest.importorskip("matplotlib")
+    for name in ("rul_trajectories.png", "window_mae_per_tool.png", "error_by_rul.png"):
+        assert (out / "figures" / name).stat().st_size > 10_000
+    after = write_run_report(
+        store, tmp_path, RUN_SPEC, today=date(2026, 12, 1), out=tmp_path / "after"
+    )
+    assert "with `--unseal`" not in (after / "REPORT.md").read_text(encoding="utf-8")
+    assert (
+        json.loads((after / "run_summary.json").read_text())["test"]["unsealed_before_freeze"]
+        is False
+    )

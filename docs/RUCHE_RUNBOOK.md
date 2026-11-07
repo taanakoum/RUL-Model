@@ -24,7 +24,7 @@ Every block marked `bash` is typed **on Ruche** (in the SSH session). Every bloc
 | Downloading model weights | **Ruche login node** (`slurm/prefetch_weights.sh`) | Compute nodes have no internet; the laptop keeps no weights |
 | Stores, encoder features, feature check (Stage 3) | Ruche jobs J0-J3 | Your instruction: encoders run on Ruche |
 | Training studies (Stages 4-8) | Ruche job arrays (J1, J5-J13) | Plan §16.4 |
-| Baseline B6, OmniFuser-RUL: caches, 13 study arms, results | Ruche jobs `b6-prepare`, `b6-<arm>`, `b6-results` (§12.1-§12.2) | D20; after the Stage-3 photo decision |
+| Baseline B6, OmniFuser-RUL: one full training run and its report | Ruche jobs `b6-train`, `b6-report` (§12.1-§12.2) | D20; after the Stage-3 photo decision |
 | Reading reports, writing the log | Laptop | Results are copied back (§13) |
 
 ### The path at a glance
@@ -233,7 +233,7 @@ conda create -n rulfuse python=3.11 -y
 source activate rulfuse
 python -m pip install --no-cache-dir --upgrade pip
 python -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu126
-python -m pip install --no-cache-dir -e ".[test,encoders,omnifuser]"
+python -m pip install --no-cache-dir -e ".[test,encoders,omnifuser,eda]"
 ```
 
 | Command | What it does |
@@ -241,7 +241,7 @@ python -m pip install --no-cache-dir -e ".[test,encoders,omnifuser]"
 | `conda create -n rulfuse python=3.11 -y` | An environment named `rulfuse` with Python 3.11 (the project needs 3.11 or 3.12). If it fails with `PackagesNotFoundError`, add `-c conda-forge` |
 | `source activate rulfuse` | Switches to it. **Not** `conda activate`, **not** `conda init` |
 | `pip install torch torchvision --index-url …/cu126` | PyTorch and the matching torchvision for CUDA 12.6: kernels for the V100s (`gpu_test`) and the A100s (`gpua100`). Installed together, pip picks a torchvision built for that torch (a mismatched pair fails with errors such as `operator torchvision::nms does not exist`) |
-| `pip install -e ".[test,encoders,omnifuser]"` | numpy, scipy, Pillow, pyarrow, pytest, transformers, mantis-tsfm, OmniFuser v1.1 (from its GitHub tag, for baseline B6) and this project (the `rulfuse` command); keeps the PyTorch above. `--no-cache-dir` keeps pip's cache out of the home quota |
+| `pip install -e ".[test,encoders,omnifuser,eda]"` | numpy, scipy, Pillow, pyarrow, pytest, transformers, mantis-tsfm, OmniFuser v1.1 (from its GitHub tag, for baseline B6), matplotlib (B6's report figures) and this project (the `rulfuse` command); keeps the PyTorch above. `--no-cache-dir` keeps pip's cache out of the home quota |
 
 Check:
 
@@ -258,7 +258,7 @@ The first line must print a torch version ending in `+cu126`, a torchvision endi
 ```bash
 source slurm/env.sh
 python -m pip install --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cu126
-python -m pip install --no-cache-dir -e ".[test,encoders,omnifuser]"
+python -m pip install --no-cache-dir -e ".[test,encoders,omnifuser,eda]"
 python -c "import torch, torchvision, omnifuser; print(torch.__version__, torchvision.__version__, omnifuser.__version__)"
 ```
 
@@ -341,8 +341,8 @@ Reasons in the last column of `squeue`:
 | `chain.sh` | Repeats a job for work longer than 24 h (Stage 5 onwards, if a study needs it) |
 | `status.sh` | Jobs, stores, caches, reports and logs with errors. Reads files only: fine on the login node |
 | `prefetch_weights.sh` | Login-node weight download (§8) |
-| `omnifuser_rul.sh` | B6: checks Stage 3's outputs and photo decision, then submits the cache job and one job per study arm (§12.1) |
-| `omnifuser_results.sh` | B6: the body of the results job; writes `RESULTS.md` and packs the archive to copy home (§12.2) |
+| `omnifuser_rul.sh` | B6: checks Stage 3's outputs and photo decision, then submits the training job and the report job chained after it (§12.1) |
+| `omnifuser_results.sh` | B6: the body of the report job; writes `REPORT.md` and its figures and packs the archive to copy home (§12.2) |
 
 Options on the `sbatch` line go **before** the script; everything after it is the command.
 For example `sbatch --partition=gpu_test --time=00:30:00 slurm/job.sbatch …` runs the same
@@ -398,7 +398,7 @@ Each job writes `runs/logs/<name>-<ID>.out` in the repository folder.
 | `usage baselines` | `B0: mae 411.972`, `B1: mae 512.547`, `B2: mae 467.843, … coverage90 0.503, winkler90 5388.189` (plan §2.7) |
 | `offline weights` | Two `ok` lines, each with a non-empty `revision` |
 | `offline weights for B6` | `ok efficientnet_b0 …/torch_cache/hub/checkpoints/efficientnet_b0_rwightman-7f5810bc.pth \| omnifuser 1.1.0 \| torch 2.x+cu126 \| torchvision 0.y+cu126`. `B6 not installed: skipped` means §7.2 ran without the `omnifuser` extra |
-| `tests` | `149 passed, 2 skipped` (151 tests as of 2026-11-06), no failure. The two skips are the comparisons with OmniFuser's records, whose checkout is not on Ruche. The two `weights` tests and the B6 tests (`test_omnifuser_rul.py`, `test_models.py`) must **pass**: they prove offline loading and B6 on this environment. Without OmniFuser installed the B6 module is skipped instead, which is not an error for Stage 3. The B6 tests take a few minutes of CPU |
+| `tests` | `152 passed, 2 skipped` (154 tests as of 2026-11-07), no failure. The two skips are the comparisons with OmniFuser's records, whose checkout is not on Ruche. The two `weights` tests and the B6 tests (`test_omnifuser_rul.py`, `test_models.py`) must **pass**: they prove offline loading and B6 on this environment. Without OmniFuser installed the B6 module is skipped instead, which is not an error for Stage 3. The B6 tests take a few minutes of CPU |
 
 The store signature must equal the laptop's (`rulfuse store-info` on both): the same
 inputs give the same signature, so caches copied home fit the laptop's store.
@@ -484,131 +484,109 @@ reference.
 | J11 | 8 | Shapley: 7 coalitions × 10 folds | `gpua100` |
 | J12 | 8 | Sensitivity tiers 1 and 2 | `gpua100` |
 | J13 | 9 | Report | `cpu_short` |
-| `b6-pilot`, `b6-prepare` | 3 (after J3) | Baseline B6: one pilot fit; the descriptor and EfficientNet-B0 caches (§12.1) | `gpua100` |
-| `b6-<arm>` × 13 | 5-6 | B6 study, 30 fits per arm (version 3: 1 s steps, memory, temporal loss) (§12.1) | `gpua100` |
-| `b6-results` | 6; again after 2026-12-01 | B6 results and archive (§12.2) | `cpu_short` |
+| `b6-train` | after J3 | Baseline B6, the full run: its caches, then 10 folds × 3 seeds (§12.1) | `gpua100` |
+| `b6-report` | after `b6-train` | B6's report and archive (§12.2) | `cpu_short` |
 
 Rules that will hold for all of them: arrays with `%4` (at most 4 GPUs at once), resumable
 fits that skip `DONE` ones, manifests committed with their study, and no test score read
 before the design freeze (D15).
 
-### 12.1 Baseline B6, OmniFuser-RUL (D20)
+### 12.1 Baseline B6, OmniFuser-RUL (D20): one full training run
 
-A separate model: OmniFuser's architecture on this project's targets and inputs
+B6 is OmniFuser's architecture on this project's targets and inputs
 (`docs/OMNIFUSER_RUL_PLAN.md`). It needs Stage 3's stores (J0) and its decision on which
 photo types are admitted (J3), and nothing from Stages 4-9.
 
-**Ready when:** §7.2 installed the `omnifuser` extra (OmniFuser `v1.1`, published on GitHub
-as tag `v1.1`, commit `eac0fed`), §8 fetched EfficientNet-B0, and J0's log shows the
-`offline weights for B6` line and the B6 tests passing.
+**One configuration, trained once, no comparison of settings** (your decision of
+2026-11-07):
 
-**What B6 is since version 3** (2026-11-06, `docs/OMNIFUSER_RUL_PLAN.md` O7-O11):
-
-- **1 s steps.** B6 trains on its own store cut at 1 s, OmniFuser's native step:
-  36,919 prediction points, about 29,000 per fold instead of 3,000. It is scored and
-  selected on the 10 s points, the same 3,747 as RUL-Fuse and B0-B5.
-- **Memory.** A GRU memory of each tool's whole history.
-- **Temporal loss.** It penalizes a predicted RUL that rises over time, plus the slope
-  term.
-- **Ablations.** Two arms measure the memory and the temporal terms.
-
-`b6-prepare` builds the 1 s store, its descriptor cache (about a minute) and the photo
-features (shared with any segment length).
-
-**Pilot** (one fold, one seed, before the study; it also builds the caches):
-
-```bash
-sbatch --job-name=b6-pilot --time=01:00:00 slurm/job.sbatch \
-  python -m rulfuse.cli omnifuser-arm --players force tool --folds 1 --seeds 0 --feature-device cuda
-```
-
-Each epoch logs `validation MAE … s; loss mse … hinge … slope …`, and the log ends with
-`epoch N kept; S s`. S is the cost of one fit. The study is 390 fits (13 arms × 10 folds × 3
-seeds), so 13 × 30 × S over 4 GPUs at a time.
-
-| Pilot's S | Decision, before the study starts (a cost decision, not a result) |
+| Setting | Value |
 |---|---|
-| up to about 6 min | Study as is: about 20-40 GPU-hours, about a day of wall time |
-| 6-15 min | Halve the pair budget for the whole study: `-- --pairs-per-epoch 1024` (below) |
-| above 15 min | Also split each arm over two jobs (`--folds 1 2 3 4 5` and `--folds 6 7 8 9 10`), or report it first |
+| Inputs | Force (7 level descriptors × 4 channels, a signal flag) + every photo type J3 admits (frozen EfficientNet-B0 features) + usage (operating time, seconds into the recording) |
+| Steps | 1 s segments, OmniFuser's own step; windows of 96 steps; scored on the project's 10 s points |
+| Model | OmniFuser v1.1's encoder (d = 32, C2F fusion) + a **GRU** memory of the whole history (hidden 64, 10-step blocks) + a linear RUL head |
+| Loss | Point-weighted MSE **+ 1.0 × monotonic penalty** (a predicted RUL higher than an earlier one of the same tool) **+ 0.5 × slope consistency** (below the cap, RUL falls by exactly the elapsed time) |
+| Training | Adam, learning rate 1e-4, 30 epochs of 2,048 pairs, gradients clipped at 1; epoch chosen on each fold's validation tool |
+| Folds and seeds | 10 folds (each tool the test tool once) × 3 seeds = 30 fits; predictions are the mean of the seeds |
 
-The pilot's fit is kept only if the study uses the same settings: the study's
-`force+tool` arm then finds `fold-01/seed-0` finished and skips it.
+**Ready when:**
+- §7.2 installed the `omnifuser` extra (OmniFuser `v1.1`, GitHub tag `v1.1`, commit
+  `eac0fed`) and `eda` (matplotlib, for the figures);
+- §8 fetched EfficientNet-B0;
+- J0's log shows the `offline weights for B6` line and the B6 tests passing.
 
-**The study** (one cache job plus 13 arm jobs; the players are `force` and the photo types
-J3 admitted):
+**Submit** (the players are `force` and the photo types J3 admitted):
 
 ```bash
+cd "$WORKDIR/RUL-Model" && source slurm/env.sh
 bash slurm/omnifuser_rul.sh force tool chip
-bash slurm/omnifuser_rul.sh force tool chip -- --pairs-per-epoch 1024   # if the pilot says so
 ```
 
-Options after `--` go to the cache job, the arm listing and every arm job. The results
-job must be given the same ones, because they select the fits it scores. The script
-prints that command.
+It submits two jobs:
+
+| Job | Partition | Content | Expected time |
+|---|---|---|---|
+| `b6-train` | `gpua100`, 8 h limit | The 1 s store, its descriptor cache (about a minute), the photo features (a few minutes), then the 30 fits | 3-6 min per fit, about 1.5-3 h in all |
+| `b6-report` | `cpu_short` | Starts only if `b6-train` succeeded: writes the report (§12.2) and the archive | a few minutes |
 
 The script refuses to submit when:
-
 - the force store is missing (Stage 3 has not run);
 - no feature-check report exists;
-- a photo type you give is not in the report's `image_types_kept`, because B6's
-  configuration is force plus every admitted type (decision O5).
+- a photo type you give is not in the report's `image_types_kept` (B6 uses force plus every
+  admitted type, decision O5; `B6_ALLOW_UNCHECKED=1` skips this check).
 
-It prints a note if an admitted type is left out. For a pilot before J3,
-`B6_ALLOW_UNCHECKED=1 bash slurm/omnifuser_rul.sh …` skips the photo guard; never use it
-for the study.
+**While it runs:** `tail -f runs/logs/b6-train-<ID>.out` shows one line per epoch (the numbers below are only an example):
 
-**Follow it** with `bash slurm/status.sh`: the `B6 study` block shows each arm's fits as
-`done/30` and `complete`. An arm job that stops (time limit, node failure) is resubmitted
-by running `bash slurm/omnifuser_rul.sh …` again: finished fits are skipped.
-
-### 12.2 Extract the B6 results
-
-When `status.sh` shows every arm `complete` (and at any time before, for a progress
-report), run the results job:
-
-```bash
-sbatch --job-name=b6-results slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip
+```text
+fold 3 seed 1 epoch 12/30: validation MAE 231.4 s; loss mse 0.0412 hinge 0.00031 slope 0.00122
+[omnifuser-rul] epoch 17 kept; 214 s
 ```
 
-Add `-- OPTIONS` with the study's options if it was submitted with any. It runs
-`rulfuse omnifuser-results` and writes
-`$RULFUSE_DATA_ROOT/runs/omnifuser_rul/nonastreda-<store>/results/`:
+`hinge` is the monotonic penalty: it should fall towards zero as training removes rising
+predictions. `bash slurm/status.sh` shows the fits as `done/30`.
+
+**If `b6-train` stops** (8 h limit, node failure), run `bash slurm/omnifuser_rul.sh …`
+again: finished fits are skipped, and a new report job is chained. If the log shows more
+than 15 minutes per fit, the 30 fits will not fit in 8 hours. Resubmitting continues the
+run.
+
+### 12.2 The report
+
+`b6-report` runs `rulfuse omnifuser-report` and writes
+`$RULFUSE_DATA_ROOT/runs/omnifuser_rul/nonastreda-<store>/force+tool+chip/report/`:
 
 | File | Content |
 |---|---|
-| `RESULTS.md` | The tables below, readable as is |
-| `progress.json` | Per arm: fits done of 30, stale fits (other settings), the missing (fold, seed) pairs, selected epochs, fit times |
-| `curves.csv` | The validation MAE of every epoch of every fit |
-| `validation_per_unit.csv`, `analysis-validation.json` | Every arm's 3-seed ensemble on each fold's validation tool, scored on the 10 s points: window MAE, RMSE, bias, whole-life MAE, with B2 on the same points; and the temporal stability over every 1 s point (share of rising steps, mean rise, \|Δŷ + Δτ\|) |
-| `choices.json` | The comparisons fixed on validation (best single arm, best pair, best photos-only pair, best force + photo pair, and v(∅) = B2 or the usage-only arm), with the time they were recorded |
+| `REPORT.md` | The run (settings, fits, time per fit, selected epochs), the test results, the paired comparison with B2, per-tool table, error by RUL range, validation results |
+| `run_summary.json` | Every number of the report |
+| `test_per_unit.csv`, `validation_per_unit.csv` | One row per tool: window MAE, RMSE, bias, whole-life MAE, late and early rates, asymmetric score, share within ±20 %, rising steps, each seed's MAE, and B0, B1, B2 on the same points |
+| `error_by_bin.csv`, `test_trajectories.csv`, `curves.csv` | MAE by true-RUL range; true and predicted RUL of each test tool over its life; every epoch's validation MAE |
+| `figures/` | `rul_trajectories.png` (true RUL, B6 with its seed range, and B2, per test tool), `window_mae_per_tool.png`, `error_by_rul.png` |
 
-It then packs the whole `runs/omnifuser_rul` folder: every fit's predictions and
-`fit.json`, the results and the B6 job logs. The archive is
-`$WORKDIR/b6-results-<date>.tar.gz`, with its `.sha256`, a few MB. The log prints the
-`scp` line for §13.
+**What the test results report.** Each of the 10 tools is the test tool of one fold, so
+every tool gets one result. Each is scored on the project's 10 s points with RUL ≤ 1,500 s,
+the same points as RUL-Fuse and baselines B0-B2.
 
-**What to check in `RESULTS.md`.**
-
-| Section | Look for |
+| Quantity | Meaning |
 |---|---|
-| Fits | Every arm `30/30`, `Stale 0`, nothing missing. "Best triple at the end" counts fits whose validation error was still falling at epoch 30; many such fits mean 30 epochs were too few (a fact to report, not a reason to change B6 before the freeze) |
-| Validation units | Window MAE per arm against B2 (464.7 s on the validation tools) and the number of tools where the arm beats B2. The `-nomemory` and `-notemporal` rows against `force+tool+chip` say what the memory and the temporal terms add; "Rising steps" should be well below its value without the temporal terms |
-| Comparisons fixed on validation | Recorded **before 2026-12-01**: run this job once after the last arm completes and before the freeze (plan stage E, by 2026-11-25), so the test read cannot choose its own comparison |
+| Window MAE, RMSE, bias | The main accuracy, mean ± sd over the 10 tools, with a 95 % bootstrap interval over tools; bias > 0 means too optimistic |
+| Late / early predictions | Share of points predicted more than 100 s too optimistic (the dangerous error) or too pessimistic |
+| Asymmetric score | Plan §10.2's score, which penalizes late predictions more than early ones |
+| Within ±20 % | Share of points whose prediction is within 20 % of the true RUL |
+| Rising steps | Share of consecutive 1 s steps where the predicted RUL rises: what the monotonic penalty pushes down |
+| Against B2 | Mean MAE gain over the usage rule B2 (467.8 s), its 95 % interval, tools improved, and a one-sided paired Wilcoxon test |
+| Seed sd | How much the 3 seeds disagree on each tool |
 
-**Test scores (from 2026-12-01).** The test predictions are already in the archive; scoring
-them is sealed until the design freeze (D15). From that date:
+**When the test results appear.** Before the design freeze (2026-12-01, D15) the report
+contains the run and the validation results, and says the test results are sealed. From
+2026-12-01 the same job includes them. To read them earlier, run the report again with
+`--unseal`; the report then opens with a note that the test was read before the freeze:
 
 ```bash
-sbatch --job-name=b6-results-test slurm/cpu.sbatch bash slurm/omnifuser_results.sh --after-freeze force tool chip
+sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh --unseal force tool chip
 ```
 
-It refuses to run before 2026-12-01 or while any arm misses a fit. It adds:
-- `analysis-test.json` and `test_per_unit.csv`;
-- the test table, the Shapley values with tool-bootstrap 95 % intervals, and the paired
-  tests (best pair against best single; all three against the best pair; force + photo
-  against photos only) in `RESULTS.md`;
-- a check that the comparisons used are the ones `choices.json` recorded before.
+The report can also be rebuilt on the laptop from the copied archive (§13), in seconds.
 
 ---
 
@@ -642,11 +620,13 @@ cd D:\RULModel\transfer
 tar -xzf .\b6-results-<date>.tar.gz -C D:\RULModel\runs
 ```
 
-- `D:\RULModel\runs\omnifuser_rul\nonastreda-<store>\results\RESULTS.md` is the report;
-  the job logs are in `omnifuser_rul\logs\`.
-- The report can be rebuilt on the laptop from the copied predictions (seconds, CPU only):
-  `D:\RULModel\.venv\Scripts\python.exe -m rulfuse.cli omnifuser-results --players force tool chip`.
-- Record the arm completion, the validation table and `choices.json` in `PROJECT_LOG.md`.
+- The report is
+  `D:\RULModel\runs\omnifuser_rul\nonastreda-<store>\force+tool+chip\report\REPORT.md`,
+  with its figures beside it; the job logs are in `omnifuser_rul\logs\`.
+- To rebuild it on the laptop (seconds, CPU only; add `--unseal` to include the test
+  results before the freeze):
+  `D:\RULModel\.venv\Scripts\python.exe -m rulfuse.cli omnifuser-report --players force tool chip`.
+- Record the fits, the test table and the comparison with B2 in `PROJECT_LOG.md`.
 
 ## 14. Watch, resume and cancel
 
@@ -692,8 +672,9 @@ whatever finished (§13). Write the log entry.
 | `operator torchvision::nms does not exist`, or torchvision import errors | torch and torchvision from different builds | Reinstall the pair together from `…/whl/cu126` (§7.2) |
 | `…efficientnet_b0_rwightman-7f5810bc.pth missing`, or a download error in `b6-prepare` | The EfficientNet weights are not in `$TORCH_HOME` | `source slurm/env.sh && bash slurm/prefetch_weights.sh` on the login node |
 | `photo types [...] are not admitted by …` | A photo type J3 excluded was given to `omnifuser_rul.sh` | Give only the report's `image_types_kept` (O5) |
-| `refused: test scores are sealed until 2026-12-01` | `--after-freeze` before the freeze | Expected (D15); the validation results were written |
-| `refused: arms missing fits: […]` | A test read on an incomplete study | `bash slurm/omnifuser_rul.sh …` again (it resumes), then the results job |
+| `test results sealed until the design freeze` in the `b6-report` log | Before 2026-12-01 the test is not read (D15) | Expected; rerun the report from that date, or with `--unseal` |
+| `b6-report` pending with `DependencyNeverSatisfied` | `b6-train` failed or hit its time limit | Read its log; `scancel` the report job; run `bash slurm/omnifuser_rul.sh …` again (it resumes) |
+| `REPORT.md` without figures | matplotlib is not installed on Ruche | `pip install -e ".[eda]"` (§7.2), or rebuild the report on the laptop (§13) |
 
 **Interactive debugging on a GPU node** (at most 30 minutes):
 
@@ -734,8 +715,7 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 | J3 alone | `sbatch --job-name=J3-feature-check slurm/cpu.sbatch rulfuse feature-check` |
 | Store details | `rulfuse store-info` |
 | A long job in parts | `bash slurm/chain.sh N --job-name=NAME slurm/job.sbatch COMMAND …` |
-| B6 pilot | `sbatch --job-name=b6-pilot --time=01:00:00 slurm/job.sbatch python -m rulfuse.cli omnifuser-arm --players force tool --folds 1 --seeds 0 --feature-device cuda` |
-| B6 study | `bash slurm/omnifuser_rul.sh force tool chip` (the admitted photo types; `-- --pairs-per-epoch 1024` if the pilot asks) |
-| B6 results (validation; packs the archive) | `sbatch --job-name=b6-results slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip` |
-| B6 test read (from 2026-12-01) | the same with `--after-freeze` before the players |
+| B6 full run + report | `bash slurm/omnifuser_rul.sh force tool chip` (the admitted photo types) |
+| B6 report again (test included from 2026-12-01) | `sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip` |
+| B6 report with the test before the freeze | the same with `--unseal` before the players (recorded in the report) |
 | Copy home | §13 |

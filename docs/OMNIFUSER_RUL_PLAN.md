@@ -1,5 +1,14 @@
 # OmniFuser-RUL: an OmniFuser baseline for the RUL task
 
+**Version 4, 2026-11-07: B6 is trained once, with one fixed setting, and reported (O12).**
+No comparison of settings is run:
+
+- not the modality study of §8;
+- not the ablations of O11;
+- not GRU against LSTM.
+
+The run uses the version-3 design. §14 records what changed.
+
 Version 3, 2026-11-06. Version 1 (2026-11-05) was a draft; §12 lists what its
 review found and how version 2 resolves each point; version 2 was implemented and
 reviewed the same day (§14). **Version 3** (your request of 2026-11-06) adds:
@@ -55,7 +64,8 @@ independent architecture:
 | O8 | Memory | A **GRU over the tool's whole history** (`rulfuse.models.memory.CausalMemory`, shared with RUL-Fuse, D21). Its inputs are every step's force vector, a projection of the photo composite and a photo flag, averaged in 10-step blocks. Step t reads the state after the last complete block (causal); the head reads [last fused step ; memory state]. Hidden size 64 | You (2026-11-06): every new segment uses the information of all previous ones |
 | O9 | Temporal loss | Training samples are **pairs** of points of one tool, the earlier at lag 1 (the previous segment) half the time and up to 200 steps otherwise. The loss adds **1.0 × relu(ŷ_later − ŷ_earlier)** (a predicted RUL never rises) and **0.5 × ((ŷ_earlier − ŷ_later) − Δτ)²** where the earlier target is below the cap (true RUL falls by exactly Δτ), all on y/H (`rulfuse.models.losses`, D22) | You (2026-11-06), plus the slope term (a stronger statement of the same fact, already in RUL-Fuse's plan) |
 | O10 | Epochs | **2,048 pairs (4,096 windows) per epoch**, 30 epochs: a fixed training budget, close to version 2's, despite 10× more points | Cost (§10) |
-| O11 | Ablations | Two extra arms with all players: **without the memory** and **without the temporal terms** | Measures what O8 and O9 add |
+| O11 | Ablations | Two extra arms with all players: **without the memory** and **without the temporal terms** | Measures what O8 and O9 add. **Not run (O12)** |
+| O12 | One full run | **One configuration, trained once:** force + every admitted photo type + usage; 1 s steps; the GRU memory (O8); the loss with the monotonic penalty and the slope term (O9); 10 folds × 3 seeds = 30 fits. Its report gives each tool's test result (each tool is the test tool of one fold) against B0-B2 on the same points. **The modality study (§8), the ablations (O11) and any GRU/LSTM comparison are not run.** Test results appear from the freeze (D15), or earlier with `--unseal`, which the report records | You (2026-11-07): no experiments on the OmniFuser implementation, one setting, one full run, test results for a report |
 
 ## 2. Summary
 
@@ -266,6 +276,11 @@ B6 gives points, not intervals, so its uncertainty and decision rows show "–".
 
 ## 8. The modality study
 
+> **Not run (O12, 2026-11-07).** B6 is trained once in its single configuration. This
+> section stays as the design of a study that could be run later. Its code remains
+> (`study.py`, `report.py`, `omnifuser-study`, `omnifuser-results`) but is not used.
+> RUL-Fuse's Shapley study (project plan §11) remains the project's modality study.
+
 **Arms.** Usage is on in all arms. Each arm runs 10 folds × 3 seeds.
 
 | Arm (folder name) | `--players` | Other options |
@@ -380,6 +395,8 @@ way, the ranking is a property of the data, not of one model.
 - One fit (version 3) trains on 30 × 4,096 windows, plus the memory over
   the 8 training tools for each of its 3,840 batches. Expected 3-6 minutes on an
   A100 with cached features; the pilot measures it.
+- **Version 4 (O12): one run of 30 fits, about 1.5-3 GPU-hours, in one job, followed by a
+  CPU report job.** The rest of this list was the version-3 study's cost:
 - 13 arms × 10 folds × 3 seeds = 390 fits, about 20-40 GPU-hours. The 30 fits of
   an arm form one job, so the study is 13 jobs of at most 8 hours each.
 - If the pilot's fit takes more than 6 minutes, halve `--pairs-per-epoch` (1,024)
@@ -589,3 +606,40 @@ pyright report no issues.
 **What remains:** the same four steps as above. The pilot (runbook §12.1) now also
 decides the pair budget (§10).
 
+
+
+### Version 4 (2026-11-07): one full run and its report
+
+**Your decision.** No experiments on the OmniFuser implementation and no comparison of
+settings (for example GRU against LSTM): one setting, one full training run, and test
+results for a report. The run uses the GRU memory and the loss with the monotonic penalty.
+
+**What changed:**
+
+| Part | Version 4 |
+|---|---|
+| Run | One arm: force + the admitted photo types + usage, GRU memory, monotonic penalty 1.0 and slope term 0.5, 30 epochs of 2,048 pairs, 10 folds × 3 seeds (`slurm/omnifuser_rul.sh` submits it as `b6-train`, with `b6-report` chained after it) |
+| Report | `rulfuse omnifuser-report` (`rulfuse/omnifuser_rul/run_report.py`): settings and fits; per test tool and in summary: window MAE, RMSE, bias, whole-life MAE, late and early rates (100 s), the asymmetric score of plan §10.2, the share within ±20 %, rising steps, the seed spread; B0, B1, B2 on the same points; the paired comparison with B2 (mean gain, 95 % bootstrap interval, tools improved, one-sided Wilcoxon); error by true-RUL range; three figures (RUL trajectories, per-tool MAE, error by RUL range); validation results |
+| Test seal | Test results are included on or after 2026-12-01 (D15). `--unseal` includes them earlier, and the report opens with a note recording the date |
+| Not run | The modality study (§8), the ablations (O11), the pilot of version 3, and any memory-cell comparison (the GRU is fixed; `CausalMemory` still accepts `cell="lstm"` as a generic option, unused) |
+| Metrics added | `rulfuse.metrics`: `phm_score`, `late_rate`, `early_rate`, `relative_accuracy`, `error_by_bin`, `bootstrap_mean_ci` |
+
+**Verification:**
+
+- **Report tests.** A fake run on the toy store has predictions = target + a per-tool bias
+  ± 10 s by seed. They check:
+  - each tool's window MAE and bias equal its bias;
+  - the seed spread equals the spread of the two seeds;
+  - B2 equals `b2_by_unit` on the same points;
+  - the gain over B2 and the tools improved;
+  - the error-by-range points sum to the window points;
+  - the seal before the freeze, the `--unseal` note, and the read after the freeze;
+  - the figures are written.
+- **Metrics by hand.** The new metrics are checked against hand computations.
+- **Real store.** A fake run on the real 1 s store gives B2 = 467.8 s, B0 = 412.0 s and
+  B1 = 512.5 s on the report's points, exactly plan §2.7. This shows the report scores the
+  right points.
+- **Figures.** They were rendered and inspected.
+- **Submission.** A dry run of `slurm/omnifuser_rul.sh` with a fake `sbatch` submits
+  `b6-train`, then `b6-report` with `afterok`. Options after `--` reach both jobs, and an
+  excluded photo type is refused.
