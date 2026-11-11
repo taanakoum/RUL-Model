@@ -67,7 +67,7 @@ laptop: copy back the report (+ the 55 MB of caches) → PROJECT_LOG.md
   download, edit and submit there. **Never compute there**: heavy processes are killed and
   you get a warning email.
 - **Compute node**: where jobs run, with CPUs or GPUs. You never log in to one directly
-  (except for short interactive debugging, §15).
+  (except for short interactive debugging, §16).
 - **Job**: a script plus its resource request (CPUs, GPUs, time, partition), handed to
   SLURM with `sbatch`. It waits in a queue, then runs without you. Its output goes to a log
   file.
@@ -483,9 +483,9 @@ reference.
 | Job | Stage | Content | Partition |
 |---|---|---|---|
 | J1 | 4 | Pilot: one fold, F1 on the cached features; measures the cost of a fit | `gpua100` |
-| J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds (array) | `gpua100` |
-| J6 | 5 | Gate 2b: 4 options + 3 controls × 10 folds | `gpua100` |
-| J7 | 5 | Sweep: 10 variants × 10 folds | `gpua100` |
+| J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds (60 tasks; §15.3) | `gpua100` |
+| J6 | 5 | Gate 2b: the default + 4 options + 3 controls × 10 folds (80 tasks; §15.3) | `gpua100` |
+| J7 | 5 | Sweep: the default + 10 variants × 10 folds (110 tasks; §15.3) | `gpua100` |
 | J8 | 6 | Gate 3: 2 heads × 10 folds, 4 inner fits per seed | `gpua100` |
 | J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each | `gpua100` |
 | J11 | 8 | Shapley: 7 coalitions × 10 folds | `gpua100` |
@@ -666,7 +666,185 @@ A cache folder with another signature is refused, never mixed: delete it to rebu
 **Daily routine.** `bash slurm/status.sh`. Read any log listed with an error. Copy home
 whatever finished (§13). Write the log entry.
 
-## 15. Troubleshooting
+## 15. Stage 4 and Stage 5: RUL-Fuse training on Ruche
+
+Stage 4 checks that the RUL-Fuse training code behaves (seven sanity checks) and times one
+fit (the pilot). Stage 5 runs the three decision studies that choose the model's design:
+Gate 2a, Gate 2b and the sweep. All of them read the Stage 3 feature caches and train on
+one A100 per task.
+
+### 15.1 Before you start
+
+- Stage 3 is done: J0-J3 succeeded, the caches under `interim/features/nonastreda/` are
+  complete, and the feature check is logged (§11). B6 (§12.1) is not needed.
+- The code on Ruche is current, and the environment is loaded:
+
+```bash
+cd "$WORKDIR/RUL-Model"
+git pull
+source slurm/env.sh
+mkdir -p runs/logs
+```
+
+### 15.2 Stage 4: sanity checks (J4) and pilot (J1)
+
+```bash
+bash slurm/stage4.sh
+```
+
+It submits two jobs that run at the same time:
+
+| Job | Partition | Content | Expected time |
+|---|---|---|---|
+| J4 sanity | `gpua100`, 6 h limit | `rulfuse sanity --device cuda`: the seven checks below, on fold 1 (the toy data for check 5). Writes `$RULFUSE_DATA_ROOT/runs/sanity/report.json` | up to a few hours |
+| J1 pilot | `gpua100`, 4 h limit | `bash slurm/study.sh pilot`: an array of one task (fold T1, F1 at the defaults, 3 seeds) and then an aggregation job | not known yet: this run measures the time of a fit |
+
+Each check reads only training and validation tools (D15). The pass rules are fixed:
+
+| # | Check | Pass when |
+|---|---|---|
+| 1 | Overfit one unit, regularization off | training MAE < 10 s |
+| 2 | Failure times permuted among the training units | validation MAE no better than B2 − 10 s |
+| 3 | Usage-only model B3, no trajectory augmentation | within 20 s of B2 |
+| 4 | Oracle input: the measured causal HI of the previous recording | validation MAE < 0.8 × B2 |
+| 5 | Toy data (known RUL) | validation MAE below B2 and 90 % coverage in [0.8, 0.98] |
+| 6 | Truncation invariance | outputs up to a cut unchanged when later tokens are removed |
+| 7 | The same seed twice on a CPU | identical weights |
+
+Check 5's coverage band is wider than the plan's 0.88-0.92 because one toy validation tool
+has few points (logged as an amendment in `PROJECT_LOG.md`).
+
+**What you should see.**
+
+- `runs/logs/J4-sanity-<ID>.out` has one line per check, `check N: pass {...}` or
+  `check N: FAIL {...}`, then `all pass: True (…/runs/sanity/report.json)`.
+- The pilot's log is `runs/logs/pilot-<ID>_0.out`. When the aggregation job has run,
+  `$RULFUSE_DATA_ROOT/runs/pilot/REPORT.md` exists. The pilot is not a decision.
+- **Record the time per fit.** Each fit's `selection.json` has a `seconds` field, under
+  `$RULFUSE_DATA_ROOT/runs/pilot/F1-default/fold-T1/seed-<s>/`:
+
+```bash
+grep '"seconds"' "$RULFUSE_DATA_ROOT"/runs/pilot/F1-default/fold-T1/seed-*/selection.json
+```
+
+  Write the three values in `PROJECT_LOG.md`. They set the time limits of J5-J7 (§15.3).
+- **If any check prints `FAIL`, do not start Stage 5.** Copy `runs/sanity/report.json` home
+  (§15.5) and send it, with the log, before anything else is submitted.
+
+To run only some checks (for example after a fix), give their numbers; `--steps N` shortens
+the training phase for a quick trial:
+
+```bash
+sbatch --job-name=J4-sanity --partition=gpua100 --time=06:00:00 slurm/job.sbatch \
+    python -m rulfuse.cli sanity --device cuda --checks 1 2
+```
+
+### 15.3 Stage 5: three studies, one after another
+
+Each study inherits the decision of the previous one (`inherits` in its file under
+`configs/studies/`), so they cannot be submitted together. Read each report before the next
+submission.
+
+| Job | Command | Arms × folds | Tasks | Fits (3 seeds) | Study file |
+|---|---|---|---|---|---|
+| J5 Gate 2a | `bash slurm/study.sh gate2a` | 6 × 10 | 60 | 180 | `gate2a.json` |
+| J6 Gate 2b | `bash slurm/study.sh gate2b` | 8 × 10 | 80 | 240 | `gate2b.json` |
+| J7 Sweep | `bash slurm/study.sh sweep` | 11 × 10 | 110 | 330 | `sweep.json` |
+
+- **Gate 2a**: learning rate of each family (F1 and F0, rates 3e-4, 1e-3, 3e-3), then F1
+  against F0 at their best rates.
+- **Gate 2b** (inherits Gate 2a): trajectory augmentation and phase A each stay only if they
+  win against the arm without them; the token modes (`default`, `tokens-relative`,
+  `tokens-absolute`) are peers; 3 of the 8 arms are **reported controls**
+  (`control-last-recording`, `control-no-memory`, `control-no-hinge`) and decide nothing.
+- **Sweep** (inherits both): one factor at a time against the default (`d32`, `d96`,
+  `dropout0.1`, `dropout0.3`, `rank8`, `rank32`, `rho0.1`, `rho0.3`, `wfar0.1`, `wfar1.0`).
+
+`slurm/study.sh STUDY` does three things in order:
+
+1. `python -m rulfuse.cli manifest --study STUDY` writes
+   `$RULFUSE_DATA_ROOT/runs/STUDY/manifest.tsv`, one line per arm × fold. It **refuses to
+   start** when an inherited study has no `decision.json` yet.
+2. It submits the array (`slurm/array.sbatch`, one A100 per task, 4 CPUs, **4 h limit per
+   task**, at most **4 tasks at once** by `%4`). Task N runs
+   `python -m rulfuse.cli run-task --study STUDY --task N --device cuda`, which trains the
+   3 seeds of that arm and fold.
+3. It submits the aggregation on `cpu_short`, which starts only when the whole array
+   succeeded.
+
+**What you should see.** The script prints
+`STUDY: array <ID> (N tasks), aggregation <ID> (waits for the array)` and the `scancel`
+line. `bash slurm/status.sh` shows the array; array logs are
+`runs/logs/STUDY-<ID>_<task>.out`. When the aggregation has run:
+
+| File under `$RULFUSE_DATA_ROOT/runs/STUDY/` | Content |
+|---|---|
+| `REPORT.md` | The study's validation scores per arm and the decision, in words |
+| `decision.json` | The adopted settings; the next study reads it |
+| `summary.csv` | One row per arm and fold |
+
+The aggregation log prints each arm's mean validation window MAE and `adopted: …`.
+
+**Time limits.** A task is 3 fits and has 4 h, so a fit must take under about 80 minutes.
+Check the pilot's `seconds` (§15.2) before J5. If it is longer, stop and ask before
+submitting: the limit is changed in `slurm/array.sbatch`, never by shrinking a study.
+
+**Resuming.** If tasks hit the time limit or a node fails, run the same command again:
+
+```bash
+bash slurm/study.sh gate2a
+```
+
+Fits with a `DONE` file are skipped and an interrupted fit resumes from its checkpoint (one
+is written at every evaluation). If the aggregation ran before every fit finished, it
+printed `incomplete: N arm/fold cells missing` and wrote no decision. When the fits are
+complete, run it alone on a CPU node:
+
+```bash
+sbatch --job-name=gate2a-aggregate slurm/cpu.sbatch python -m rulfuse.cli aggregate --study gate2a
+```
+
+**What Stage 5 decides on.** Only validation tools. Each fit also writes test rows, but the
+aggregation never loads them (D15); the test stays sealed until 2026-12-01.
+
+**Determinism.** Fits set deterministic kernels; the sbatch wrappers export
+`CUBLAS_WORKSPACE_CONFIG=:4096:8`.
+
+### 15.4 Problems specific to these jobs
+
+| You see | Cause | Fix |
+|---|---|---|
+| `manifest: … aggregate study gate2a first` (`FileNotFoundError` naming `runs/gate2a/decision.json`) | The previous study has no decision yet: it is not finished, or its aggregation did not run | Finish it (resubmit), run its aggregation (§15.3), then submit this one |
+| `incomplete: N arm/fold cells missing` | The aggregation ran before every fit was `DONE` | `bash slurm/study.sh STUDY` again, then the aggregation alone (§15.3) |
+| `CUDA out of memory` in an array log | The fit does not fit the GPU | Do not lower `copies` or any other setting in a study arm: it changes the design of a gate. Send the log and ask before changing anything |
+| `DUE TO TIME LIMIT` in an array task | A fit is slower than the pilot suggested | Resubmit (§15.3); if it repeats, send the logs |
+| A check prints `FAIL` | See the rule of that check (§15.2) | Do not start Stage 5; send `runs/sanity/report.json` and the J4 log |
+
+### 15.5 Bring the results home
+
+After Stage 4 and after each study, on the laptop (PowerShell). The three top files of a
+study are enough (a few hundred KB); the fit folders hold checkpoints and stay on Ruche.
+
+```powershell
+$R = "/workdir/$RucheLogin/rul_data/runs"
+New-Item -ItemType Directory -Force D:\RULModel\runs\sanity, D:\RULModel\runs\pilot | Out-Null
+scp "${Ruche}:$R/sanity/report.json" D:\RULModel\runs\sanity\
+scp "${Ruche}:$R/pilot/REPORT.md" "${Ruche}:$R/pilot/decision.json" "${Ruche}:$R/pilot/summary.csv" D:\RULModel\runs\pilot\
+
+foreach ($s in "gate2a", "gate2b", "sweep") {
+    New-Item -ItemType Directory -Force "D:\RULModel\runs\$s" | Out-Null
+    scp "${Ruche}:$R/$s/REPORT.md" "${Ruche}:$R/$s/decision.json" "${Ruche}:$R/$s/summary.csv" "D:\RULModel\runs\$s\"
+}
+```
+
+Run the `foreach` once a study has finished; copy only the studies that exist. To bring
+every fit folder of a small study as well, use `scp -r "${Ruche}:$R/pilot" D:\RULModel\runs\`.
+
+Then record in `PROJECT_LOG.md`: the job IDs, the commit, the time per fit, and the
+decision of each study (`decision.json` → `adopted`). You commit the log and the study
+results yourself.
+
+## 16. Troubleshooting
 
 | You see | Cause | Fix |
 |---|---|---|
@@ -709,7 +887,7 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 `exit` ends the session and frees the GPU. `--limit` encodes only a few segments and
 `--features-root` keeps the trial out of the real caches.
 
-## 16. Rules of the cluster
+## 17. Rules of the cluster
 
 - **Never compute on the login nodes.** Installing, downloading, editing, moving files,
   submitting and `status.sh` are fine; tests, stores, features and training go into jobs.
@@ -722,7 +900,7 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 - **Help:** <ruche.support@universite-paris-saclay.fr>, with your login, lab, the job ID,
   the problem, the log and whether support may read your files.
 
-## 17. Cheat sheet
+## 18. Cheat sheet
 
 | Step | Command |
 |---|---|
@@ -739,4 +917,15 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 | B6 full run + report | `bash slurm/omnifuser_rul.sh force tool` (the admitted photo types: tool, readmitted by D24) |
 | B6 report again (test included from 2026-12-01) | `sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool` |
 | B6 report with the test before the freeze | the same with `--unseal` before the players (recorded in the report) |
+| Stage 4: sanity checks (J4) + pilot (J1) | `bash slurm/stage4.sh` (§15.2) |
+| Pilot alone | `bash slurm/study.sh pilot` |
+| Sanity checks alone, some of them | `sbatch --job-name=J4-sanity --partition=gpua100 --time=06:00:00 slurm/job.sbatch python -m rulfuse.cli sanity --device cuda --checks 1 2` |
+| Time per fit (sets J5-J7 limits) | `grep '"seconds"' "$RULFUSE_DATA_ROOT"/runs/pilot/F1-default/fold-T1/seed-*/selection.json` |
+| Gate 2a (J5), then read `runs/gate2a/REPORT.md` | `bash slurm/study.sh gate2a` |
+| Gate 2b (J6), after Gate 2a's decision | `bash slurm/study.sh gate2b` |
+| Sweep (J7), after Gate 2b's decision | `bash slurm/study.sh sweep` |
+| Finish an interrupted study | the same `bash slurm/study.sh STUDY` (skips `DONE` fits, resumes the rest) |
+| Aggregate a study alone | `sbatch slurm/cpu.sbatch python -m rulfuse.cli aggregate --study STUDY` |
+| Write a manifest only | `python -m rulfuse.cli manifest --study STUDY` (login node, seconds) |
+| One task by hand | `sbatch --array=N slurm/array.sbatch STUDY` |
 | Copy home | §13 |

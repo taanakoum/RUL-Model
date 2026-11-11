@@ -1003,7 +1003,7 @@ are not needed). The function swallowed the error and returned None.
   (`WEIGHT_PATTERNS`). It falls back to the cache's `refs/main`, and requires a
   `*.safetensors` file in the snapshot.
 - Test: `tests/test_encoders.py::test_a_weights_only_cache_still_gives_the_revision`.
-- Runbook §15: a troubleshooting row.
+- Runbook §15 (now §16): a troubleshooting row.
 
 **Ruche end of life.** Ruche's login banner says it will be replaced: back up data by the
 end of November 2026. Results must be copied home (runbook §13) before then.
@@ -1097,7 +1097,9 @@ run-to-run step; the limit is 3.
 
 **What the trajectories show:**
 
-- The decline is tracked on T3, T6–T9, but starts about 5–10 min early (pessimistic).
+- The decline is tracked on T3, T6–T9, but starts early (pessimistic): the mean prediction
+  falls below 1,200 s 10.5, 46.5, 18.9, 8.5 and 9.5 min before the truth does (corrected
+  2026-11-11 from "5–10 min"; computed in `docs/B6_REPORT_BRIEF.md` Appendix A).
 - Wear is missed on T4 and T5: the prediction stays at the cap.
 - On T1 and T10 the prediction falls to only about 1,200 s.
 - T2 is far too pessimistic from minute 15.
@@ -1112,3 +1114,82 @@ run-to-run step; the limit is 3.
   against test 587).
 - Expected for an end-to-end OmniFuser with ten tools.
 - B6 stays one fixed setting (O-decisions): this is its result. It is not tuned.
+
+## B6 report brief, Stage 4 and Stage 5 code; model routing (2026-11-11)
+
+**Model routing (your instruction).** `CLAUDE.md` at the repo root:
+- Opus handles planning, diagnosis and subtle code (causality, loss, training loop, the
+  test seal).
+- Sonnet subagents handle well-defined work, especially reports.
+
+This session followed it:
+- Sonnet wrote the B6 brief, `stats.py`/`evaluation.py`, `uncertainty.py`, the B4/B5/R1
+  baselines and the runbook section.
+- Opus wrote tokens, sequences, models, training, diagnostics, studies and the sanity
+  checks, and reviewed the Sonnet output.
+
+**B6 report brief.** `docs/B6_REPORT_BRIEF.md` is everything needed to write B6's report:
+data, method, settings, results, an explanation of the results, threats to validity, an
+outline, figure captions and how to reproduce it. I spot-checked two of its own numbers
+against the files: the training MSE falls 51.9×, and T6 declines 46.5 min early.
+
+**Decision D25 (lessons from B6; validation and training facts only, never its test
+scores).** No design value changes. The added diagnostics:
+- the generalization gap;
+- the selection noise;
+- cap saturation;
+- a warning when validation MAE is above B0.
+
+**Stage 4 code.** It is done and tested on the laptop:
+- `rulfuse/tokens.py`: signal and image tokens. Training-only descriptor scaling; causal
+  change from the healthy start; cross-fitted HI readouts.
+- `rulfuse/sequences.py`: trajectory augmentation, targets, point weights, batches.
+- `rulfuse/models/fusion.py`: F1 and F0, with the relative-time bias, the memory and the
+  gPoE.
+- `rulfuse/models/heads.py`: the Student-t head.
+- `rulfuse/train.py`:
+  - phases A and B; EMA; smoothed selection; patience;
+  - resume from a checkpoint (identical weights);
+  - deterministic kernels: the same seed gives the same weights, after a float-level
+    difference in the gather's backward was found and fixed.
+- `rulfuse/diagnostics.py`: §7.8 plus D25.
+- `rulfuse/uncertainty.py`, `rulfuse/evaluation.py`, `rulfuse/stats.py`.
+- `rulfuse/degradation.py`, and B4, B5, R1 in `rulfuse/baselines.py`.
+- `rulfuse/sanity.py`: the seven checks.
+- Size: F1 about 152 k trainable parameters on Nonastreda, F0 about 167 k.
+- Real-data smoke on the laptop: 13 steps on fold T1, F1 and F0 both. Plumbing only, no
+  result.
+
+**Feature baselines on validation units only** (window MAE, s; Sonnet run, script
+`scripts/feature_baselines.py`):
+
+| B2 | B4 (ridge on descriptors + usage) | B5 (tool-photo readout + extrapolation) | R1 (oracle: measured HI + extrapolation) |
+|---|---|---|---|
+| 464.7 | 415.1 | 417.9 | 307.0 |
+
+- R1 is best on average, as P16 requires, but not on every fold. Its errors are
+  one-sided: on T3, T5–T8 and T10 the failure label is 200–750 s away from the first
+  smoothed-HI crossing of the median threshold (about 112), and the causal HI runs high.
+- B5's readout is weak: about 30 µm RMSE on a 20–120 µm range.
+- These are reference rows, not decisions.
+
+**Stage 5 code.**
+- `configs/studies/{pilot,gate2a,gate2b,sweep}.json`.
+- `rulfuse manifest | run-task | aggregate` (`rulfuse/study.py`), with rules A and B fixed
+  in advance.
+- `slurm/array.sbatch`, `slurm/study.sh`, `slurm/stage4.sh`.
+- The aggregation filters test rows out when it reads a predictions file (D15).
+- Gate 2b and the sweep each run their own default arm: J6 has 80 tasks and J7 has 110
+  (the plan said 70 and 100).
+
+**Plan amendments:**
+- D25 added.
+- Appendix A and §7.4 loss weights corrected to 0.05 and 1/15 (they still showed the
+  pre-D22 values).
+- The relative-time bias is implemented as a piecewise-linear function on 32 knots.
+- The band of sanity check 5 widened to 0.80–0.98.
+- J4 added; J6 and J7 counts corrected.
+
+**Next on Ruche:** `git pull`, then `bash slurm/stage4.sh` (J4 and the pilot J1). If every
+check passes: `bash slurm/study.sh gate2a`.
+

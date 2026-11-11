@@ -72,6 +72,7 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D22 | Rising predictions | **Penalized in the loss of both models** (`rulfuse.models.losses`): λ_mono · relu(μ_later − μ_earlier) on pairs of points of one unit (RUL can only fall), with the slope-consistency term where the target is below the cap; λ_mono = 1/15 and λ_cons = 0.05 on y/H in both models (§6.7). **Both terms move only the earlier prediction of a pair; the later one is the fixed reference** | You (2026-11-06). Weights and reference changed 2026-11-07, after your question: with 1.0 on both predictions, an earlier prediction the model cannot correct dragged later ones down to it |
 | D23 | Inference modes | **Two modes for every model's predictions** (`rulfuse.inference`): **current**, each prediction as the model makes it (the primary result); **context**, where the unit's earlier predictions, aged by the operating time since, are blended with the new one (time constant 120 s and cap margin H/15, fixed in advance). Both are reported side by side with a paired comparison and a decision rule fixed in advance (§10.3). B6 reports both now; RUL-Fuse's evaluation uses the same function | You (2026-11-07): a mode where previous segments guide the new prediction, and a way to compare the two |
 | D24 | Photo types on Nonastreda | **Force + tool photos.** The Stage-3 feature check (report `nonastreda-3e357b5a23ff.json`, 2026-11-11) found all three photo types informative and excluded all three for leaking the stage label. Workpiece (10 of 10 tools on PC1, PC2 and the readout) and chip (readout 7 of 10, PC1 6 of 10) stay excluded. **Tool is readmitted**: only its PC2 crossed the limit (4 of 10, limit 3); its readout scores 3 of 10, the same as the true wear (`hi_reference` 3 of 10); its probe beats the mean (MAE 21.7 vs 35.8) and its shuffled control collapses. Recorded in `configs/feature_check_overrides.json`, read by `rulfuse.features.check.admitted_image_types` (B6's submit guard, RUL-Fuse). The headline model, B6 and the modality study use force and tool; the workpiece report stays the leakage demonstration | You (2026-11-11), before any RUL result |
+| D25 | Lessons from B6 for RUL-Fuse | **Diagnostics and controls only; no design value changes.** B6's full run (2026-11-11) over-fitted: its median training MSE fell 52× while its median validation MAE stayed between 359 and 409 s; 6 of 30 fits peaked in the first 2 epochs; the epoch-to-epoch validation noise (median per-fit sd 37 s) was larger than the gain over training; some tools stayed at the cap. Only these training and validation facts are used, never B6's test scores (D15 stands; D20's "no RUL-Fuse decision reads B6" is relaxed for these diagnostics at your request). RUL-Fuse's plan already carries the remedies (frozen encoders, about 0.15 M trainable parameters, phase A, trajectory augmentation, EMA, smoothed selection, patience). Added: (1) every evaluation also scores the training units, and a validation/training MAE ratio above 3 warns (generalization gap); (2) the selection noise (sd of successive validation differences) is reported per fit; (3) cap saturation on the validation unit (μ within H/15 of the cap while RUL < H/2) warns above 50 %; (4) a validation MAE above the constant B0 warns, besides B2; (5) Stage 5's exit also reports the winner against B0 and B4 on validation | You (2026-11-11): "from the results derived from this experiment continue implementing stage 4 and 5 and make amendments where needed" |
 
 ---
 
@@ -692,7 +693,8 @@ no ranking).** It only checks that the chosen features work and are clean.
   started. They are added to every force token. The absolute time embedding is
   part of U and switches off with it.
 - **Relative time:** each attention head adds a learned bias
-  b_h(Δτ) = MLP_h(log(1 + Δτ / 10 s)), where Δτ is the cutting time between
+  b_h(Δτ) = MLP_h(log(1 + Δτ / 10 s)) (implemented in Stage 4 as a learned piecewise-linear
+  function of the same log-time on 32 knots per head: the same role, without a (batch × L² × hidden) tensor), where Δτ is the cutting time between
   the query and the key. This gives every token, photos included, its age
   relative to the prediction point, without revealing absolute time.
 - **Modality embedding** on every token.
@@ -1033,7 +1035,7 @@ Cost: about 0.05-0.3 s per step on a CPU, so a fit takes 1-3 min; the pilot
 | Phase | Steps | Losses (weights) | Learning rate | Purpose |
 |---|---|---|---|---|
 | A: HI warm-up | 1-100 | HI 1.0 (skipped when a dataset has no HI) | Linear warm-up over 20 steps to the base rate | The backbone learns a unit-invariant health state before it sees the 8 failure events |
-| B: joint | 101-500 | MSE 1.0, consistency 0.1, NLL ramped 0 → 0.5 over steps 101-150 (mean detached); HI 0.3 | Cosine, base rate → 1e-5 | RUL from the wear state and the history |
+| B: joint | 101-500 | MSE 1.0, consistency 0.05, monotonic hinge 1/15, NLL ramped 0 → 0.5 over steps 101-150 (mean detached); HI 0.3 | Cosine, base rate → 1e-5 | RUL from the wear state and the history |
 | C: calibration | After training | None | – | §9 |
 
 - The base learning rate is 1e-3, or the Gate-2 choice.
@@ -1079,7 +1081,7 @@ tune on (OmniFuser F4).
 | 2. TTFs permuted among the training tools | Validation MAE no better than B2 | No leakage path to the labels |
 | 3. Usage-only model B3 (no trajectory augmentation) | Within 20 s of B2 | The loop reproduces a known optimum |
 | 4. Oracle token: the causally smoothed measured HI of the last recording as an input | Validation MAE well below B2, toward R1 | The model uses a strong signal when it exists |
-| 5. Synthetic trajectories: simulated wear with known RUL and noise | MAE near the noise floor; 90 % intervals cover 0.88-0.92 | Learning and uncertainty end to end |
+| 5. Synthetic trajectories: simulated wear with known RUL and noise | MAE below B2; raw 90 % intervals cover 0.80-0.98 (widened in Stage 4: one toy validation unit has about 60 window points, so ±0.02 is below its sampling error) | Learning and uncertainty end to end |
 | 6. Truncation invariance (P11) | Identical outputs | Causality |
 | 7. The same seed twice on a CPU | Identical weights | Determinism |
 
@@ -1107,6 +1109,11 @@ Written to `diagnostics.json` and plotted by `rulfuse report --diagnostics`.
    its floor; gradient norms; F0's weights.
 7. **Seed spread:** the sd of validation MAE across seeds per fold. Above
    30 s, the regularization gets a closer look.
+8. **Generalization gap (D25):** the training units' weighted MAE at every evaluation; a
+   validation/training ratio above 3 at the selected step warns.
+9. **Selection noise (D25):** the sd of successive differences of the validation curve.
+10. **Cap saturation (D25):** the share of validation window points with RUL < H/2 predicted
+    within H/15 of the cap; above 50 % warns. A validation MAE above the constant B0 also warns.
 
 ### 7.9 Failure modes and responses
 
@@ -1638,10 +1645,11 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J0g | 3 | GPU check (`gpu_test`) | 1 | – | 1 min |
 | J2 | 3 | Feature caches (`gpua100`): Mantis-8M signals, DINOv2-B photos, scale and determinism checks | 1 | – | 10-30 min |
 | J3 | 3 | Feature check (`cpu_short`): go/no-go, readouts, leakage probe | 1 | – | 2-10 min |
-| J1 | 4 | Pilot: one fold, F1 on the cached features | 1 | 3 | 30 min |
+| J4 | 4 | The seven sanity checks (`rulfuse sanity`, `slurm/stage4.sh`) | 1 | about 8 | 1-2 GPU-h |
+| J1 | 4 | Pilot: one fold, F1 on the cached features (`slurm/study.sh pilot`) | 1 | 3 | 30 min |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds | 60 | 180 | 4-5 GPU-h |
-| J6 | 5 | Gate 2b: 4 options + 3 controls (last recording; no memory; no hinge) × 10 folds | 70 | 210 | 5-6 GPU-h |
-| J7 | 5 | Sweep: 10 variants × 10 folds | 100 | 300 | 7-8 GPU-h |
+| J6 | 5 | Gate 2b: the default + 4 options + 3 controls (last recording; no memory; no hinge) × 10 folds | 80 | 240 | 6-7 GPU-h |
+| J7 | 5 | Sweep: the default + 10 variants × 10 folds | 110 | 330 | 8-9 GPU-h |
 | J8 | 6 | Gate 3: 2 heads × 10 folds, each with 4 inner fits per seed | 20 | 300 | 7-8 GPU-h |
 | J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each | 10 | 150 | 3.5 GPU-h |
 | J11 | 8 | Shapley: 7 coalitions × 10 folds (15 if the workpiece passes) | 70 (150) | 210 (450) | 5 (11) GPU-h |
@@ -1785,6 +1793,10 @@ the Student-t head with out-of-fold calibration in S6, then S7 and Shapley
   `runs/baselines`.
 - **Verification:** P10-P17.
 - **Exit:** all seven sanity checks pass; P10-P17 accepted; pilot J1 timed.
+- **Status (2026-11-11):** code done and tested on the laptop (`rulfuse/tokens.py`,
+  `sequences.py`, `models/fusion.py`, `models/heads.py`, `train.py`, `diagnostics.py`,
+  `uncertainty.py`, `degradation.py`, `evaluation.py`, `stats.py`, `sanity.py`; B4, B5, R1 in
+  `baselines.py`); J4 and J1 wait for Ruche (`bash slurm/stage4.sh`).
 
 #### Stage 5: Fusion and Gate 2 (Wed Nov 18 to Wed Nov 25)
 
@@ -1801,6 +1813,10 @@ the Student-t head with out-of-fold calibration in S6, then S7 and Shapley
   - s_U reported;
   - the validation MAE of the winner below B2's on validation.
 - **Exit:** decisions 2-7 logged.
+- **Status (2026-11-11):** studies `configs/studies/gate2a.json`, `gate2b.json`,
+  `sweep.json`; `rulfuse manifest | run-task | aggregate` (`rulfuse/study.py`); one study at a
+  time with `bash slurm/study.sh gate2a`, then `gate2b`, then `sweep`, after Stage 4 passes.
+  The aggregation loads validation rows only (D15).
 
 #### Stage 6: Uncertainty, Gate 3 and design freeze (Tue Nov 24 to Tue Dec 1)
 
@@ -1968,7 +1984,7 @@ Each has a default that the plan assumes until you answer.
 | Memory | GRU, hidden 64, over the force tokens (B6: OmniFuser's encodings of each 96-step block of 1 s steps) | D21 |
 | F1 backbone | Causal transformer: 2 layers, d = 64, 4 heads, FFN 128, dropout 0.2, relative-time bias | §6.4 |
 | Head | Student-t RUL in seconds: μ = H·sigmoid; σ floor 0.005·H; ν = 3 + softplus | §6.6 |
-| Loss weights | MSE 1; NLL 0.5 (mean detached); consistency 0.5; monotonic hinge 1.0; HI 0.3 | §6.7, D22 |
+| Loss weights | MSE 1; NLL 0.5 (mean detached); consistency 0.05; monotonic hinge 1/15 (both move only the earlier prediction); HI 0.3; F0 experts 0.5 | §6.7, D22 |
 | Point weights | Equal total per tool; w_far = 0.3 | §7.3 |
 | Optimizer | AdamW, lr 1e-3 (Gate 2a), weight decay 0.05, gradient clip 1.0 | §7.3 |
 | Schedule | Phase A 1-100 (warm-up 20); phase B 101-500, cosine; NLL ramp 101-150; EMA 0.99 restarted at 101; patience 10 evaluations | §7.4 |
