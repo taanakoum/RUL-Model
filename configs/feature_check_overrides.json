@@ -1,0 +1,12 @@
+{
+  "_about": "Photo-type decisions that differ from the Stage-3 feature check's rule, per dataset. Read by rulfuse.features.check.admitted_image_types (B6's submit guard, RUL-Fuse). Each entry records who decided, when, and why. See PROJECT_PLAN.md D24.",
+  "nonastreda": {
+    "admit": {
+      "tool": {
+        "decided": "2026-11-11, by the user, before any RUL result",
+        "report": "nonastreda-3e357b5a23ff.json",
+        "reason": "Excluded only because PC2 had a stage boundary as its largest run step in 4 of 10 tools (limit 3). Its wear readout scores 3 of 10, exactly the true wear's own count (hi_reference 3 of 10), PC1 1 and PC3 2; the probe is informative (MAE 21.7 vs 35.8 for the mean) and its shuffled control collapses (35.9). Work (10/10) and chip (readout 7/10, PC1 6/10) stay excluded."
+      }
+    }
+  }
+}

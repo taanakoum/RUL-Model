@@ -9,14 +9,15 @@
 # It submits that job and, chained after it, the report job (slurm/omnifuser_results.sh),
 # which starts only if the training succeeded. Run on the login node, from the repository:
 #   source slurm/env.sh
-#   bash slurm/omnifuser_rul.sh force tool chip
-#   bash slurm/omnifuser_rul.sh force tool chip -- --pairs-per-epoch 1024   # other settings
+#   bash slurm/omnifuser_rul.sh force tool        # Nonastreda: tool readmitted (D24)
+#   bash slurm/omnifuser_rul.sh force tool -- --pairs-per-epoch 1024   # other settings
 # Options after "--" go to the training and the report jobs alike (the report selects the
 # fits made with them). A rerun skips finished fits, so resubmitting resumes the run.
 #
 # Guards: Stage 3 must have built the stores (job J0), and every photo type given must be
 # admitted by the Stage-3 feature check (job J3): B6's configuration is "force + every
-# admitted photo type" (O5). B6_ALLOW_UNCHECKED=1 skips the second guard.
+# admitted photo type" (O5): the report's kept types plus those readmitted in
+# configs/feature_check_overrides.json (D24). B6_ALLOW_UNCHECKED=1 skips the second guard.
 set -euo pipefail
 players=()
 extra=()
@@ -45,16 +46,24 @@ root, players = sys.argv[1], [p for p in sys.argv[2:] if p != "force"]
 reports = sorted(glob.glob(os.path.join(root, "runs", "feature-check", "*.json")), key=os.path.getmtime)
 if not reports:
     sys.exit("no Stage-3 feature-check report: wait for job J3 (or set B6_ALLOW_UNCHECKED=1)")
-decisions = json.load(open(reports[-1], encoding="utf-8"))["decisions"]
-kept = decisions["image_types_kept"]
+from rulfuse.features.check import admitted_image_types
+
+report = json.load(open(reports[-1], encoding="utf-8"))
+decisions = report["decisions"]
+with open("configs/feature_check_overrides.json", encoding="utf-8") as f:
+    overrides = json.load(f)
+kept = admitted_image_types(report, overrides)
+readmitted = [k for k in kept if k not in decisions["image_types_kept"]]
 refused = [p for p in players if p not in kept]
 if refused:
     sys.exit(f"photo types {refused} are not admitted by {os.path.basename(reports[-1])} "
-             f"(kept: {kept}; excluded: {decisions['image_types_excluded']})")
+             f"and configs/feature_check_overrides.json (admitted: {kept}; excluded by the "
+             f"check: {decisions['image_types_excluded']})")
 missing = [k for k in kept if k not in players]
 if missing:
     print(f"note: admitted photo types not given: {missing} (B6's configuration uses all of them)")
-print(f"photo types {players} admitted by {os.path.basename(reports[-1])}")
+note = f" (readmitted by configs/feature_check_overrides.json: {readmitted})" if readmitted else ""
+print(f"photo types {players} admitted by {os.path.basename(reports[-1])}{note}")
 PY
 fi
 

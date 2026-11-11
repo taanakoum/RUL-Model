@@ -292,3 +292,20 @@ def feature_check(
         },
     }
     return report
+
+
+def admitted_image_types(report: dict, overrides: dict | None = None) -> list[str]:
+    """The photo types a model may use: the feature check's ``image_types_kept`` plus the
+    types readmitted for the report's dataset in ``configs/feature_check_overrides.json``
+    (PROJECT_PLAN.md D24). Only types the report examined can be readmitted."""
+    kept = list(report["decisions"]["image_types_kept"])
+    admit = (overrides or {}).get(report.get("dataset", ""), {}).get("admit", {})
+    examined = set(report["decisions"]["image_types_kept"]) | set(
+        report["decisions"]["image_types_excluded"]
+    )
+    unknown = set(admit) - examined
+    if unknown:
+        raise ValueError(
+            f"overrides name photo types the report did not examine: {sorted(unknown)}"
+        )
+    return kept + [k for k in admit if k not in kept]

@@ -73,7 +73,7 @@ independent architecture:
 | O2 | Photo encoder | **EfficientNet-B0, ImageNet weights, frozen**, as in OmniFuser | You (2026-11-05) |
 | O3 | Test reads | **After the design freeze of 2026-12-01 (D15)**. Test predictions are written by every fit but not scored before then | You (2026-11-05) |
 | O4 | Shared task settings | The targets, prediction points, folds, point weights, selection metric, seeds, ensembling and metrics are RUL-Fuse's (§3). Only the architecture is OmniFuser's | Review (§12, V2) |
-| O5 | B6's configuration, fixed now | Force + **every photo type admitted by the Stage-3 leakage probe** (the same inputs as RUL-Fuse) + usage. The secondary row B6-FT (force + tool photo) is OmniFuser's original pairing | Review (V7) |
+| O5 | B6's configuration, fixed now | Force + **every photo type admitted by the Stage-3 leakage probe** (the same inputs as RUL-Fuse) + usage. The secondary row B6-FT (force + tool photo) is OmniFuser's original pairing. **On Nonastreda (2026-11-11): force + tool + usage.** The probe excluded all three types; you readmitted tool (D24, `configs/feature_check_overrides.json`). Chip and work stay out. The configuration thus equals OmniFuser's original force + tool pairing | Review (V7); you (2026-11-11) |
 | O6 | Architecture values | OmniFuser `v1.0` defaults: d = 32, 4 RTD blocks, 4 GAT layers × 4 heads, k = 4, 2 C2F rounds; input of 96 steps; dropout 0.1; Adam, learning rate 1e-4, batch 32, 30 epochs. No search | Minimal change |
 | O7 | Time step | **1 s segments** (OmniFuser's own pooled step): B6 has its own store cut at S = 1 s. A fold trains on about 29,000 prediction points instead of about 3,000 at 10 s, and 96 steps are 96 s, about one pass. **Scored and selected on the 10 s grid** (D7): a 1 s store contains every 10 s point with the same τ, RUL and window, so B6, RUL-Fuse and B0-B5 are compared on the same 3,747 points | You (2026-11-06): more training examples; checked in §14 |
 | O8 | Memory | A **GRU over the tool's whole history** (`rulfuse.models.memory.CausalMemory`, shared with RUL-Fuse, D21). **Its input for each block of 96 steps is OmniFuser's encoding of that block** (version 6): the block's window goes through OmniFuser's force encoder and its image branch, the same modules and weights as the head's window, and each stream is averaged over the window: [encoded force ; encoded photos], 64 numbers. Step t reads the state after the last block complete at t (causal); the head reads [last fused step ; memory state]. Hidden size 64. Gradients reach the encoders through both paths. (Versions 3-5: block means of the raw step inputs, in 10-step blocks) | You (2026-11-06): every new segment uses the information of all previous ones. You (2026-11-08): the GRU takes the encoded time series and encoded images, in training and inference |
@@ -654,7 +654,7 @@ Findings and fixes:
 1. Install on Ruche (`docs/RUCHE_RUNBOOK.md` §7.2, which now includes B6) and fetch the
    EfficientNet-B0 weights (§8).
 2. After the Stage-3 photo decision (J3): the pilot, then
-   `bash slurm/omnifuser_rul.sh force tool chip` (with `work` only if it is admitted);
+   `bash slurm/omnifuser_rul.sh force tool` (D24: tool readmitted; chip and work excluded);
    runbook §12.1.
 3. When every arm is complete, and before 2026-12-01: the results job (runbook §12.2),
    which records the comparisons in `choices.json`; copy the archive home (§13).

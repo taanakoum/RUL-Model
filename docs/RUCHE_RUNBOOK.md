@@ -452,6 +452,13 @@ and the `decisions` block, for example:
   and log them; Stage 4 starts.
 - **Workpiece excluded for leakage:** expected (Stage 2). It leaves the headline model and
   the Shapley study; the report is the leakage demonstration.
+- **A type excluded narrowly, by one tool on one statistic:** compare its counts with
+  `hi_reference`, which says how often real wear itself steps most at a boundary. Only you
+  can readmit a type, before any RUL result, in `configs/feature_check_overrides.json`, with
+  the date, the report and the reason; every model reads that file. Nonastreda's first
+  report (2026-11-11) excluded all three photo types:
+  - work (10 of 10 tools) and chip (readout 7 of 10) stay out;
+  - tool was readmitted (D24): PC2 4 of 10, readout 3 of 10, the same as real wear.
 - **Force no-go:** the plan's fallback is MOMENT-1-base. Its wrapper is not implemented
   yet: report the result, and the wrapper and its prefetch
   (`bash slurm/prefetch_weights.sh AutonLab/MOMENT-1-base`) are added before rerunning J2.
@@ -520,7 +527,7 @@ photo types are admitted (J3), and nothing from Stages 4-9.
 
 ```bash
 cd "$WORKDIR/RUL-Model" && source slurm/env.sh
-bash slurm/omnifuser_rul.sh force tool chip
+bash slurm/omnifuser_rul.sh force tool
 ```
 
 It submits two jobs:
@@ -533,8 +540,10 @@ It submits two jobs:
 The script refuses to submit when:
 - the force store is missing (Stage 3 has not run);
 - no feature-check report exists;
-- a photo type you give is not in the report's `image_types_kept` (B6 uses force plus every
-  admitted type, decision O5; `B6_ALLOW_UNCHECKED=1` skips this check).
+- a photo type you give is not admitted: the report's `image_types_kept` plus the types
+  readmitted in `configs/feature_check_overrides.json` (B6 uses force plus every admitted
+  type, decision O5; on Nonastreda that is `tool`, readmitted by D24;
+  `B6_ALLOW_UNCHECKED=1` skips this check).
 
 **While it runs:** `tail -f runs/logs/b6-train-<ID>.out` shows one line per epoch (the numbers below are only an example):
 
@@ -557,7 +566,7 @@ the run.
 ### 12.2 The report
 
 `b6-report` runs `rulfuse omnifuser-report` and writes
-`$RULFUSE_DATA_ROOT/runs/omnifuser_rul/nonastreda-<store>/force+tool+chip/report/`:
+`$RULFUSE_DATA_ROOT/runs/omnifuser_rul/nonastreda-<store>/force+tool/report/`:
 
 | File | Content |
 |---|---|
@@ -589,7 +598,7 @@ contains the run and the validation results, and says the test results are seale
 `--unseal`; the report then opens with a note that the test was read before the freeze:
 
 ```bash
-sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh --unseal force tool chip
+sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh --unseal force tool
 ```
 
 The report can also be rebuilt on the laptop from the copied archive (§13), in seconds.
@@ -627,11 +636,11 @@ tar -xzf .\b6-results-<date>.tar.gz -C D:\RULModel\runs
 ```
 
 - The report is
-  `D:\RULModel\runs\omnifuser_rul\nonastreda-<store>\force+tool+chip\report\REPORT.md`,
+  `D:\RULModel\runs\omnifuser_rul\nonastreda-<store>\force+tool\report\REPORT.md`,
   with its figures beside it; the job logs are in `omnifuser_rul\logs\`.
 - To rebuild it on the laptop (seconds, CPU only; add `--unseal` to include the test
   results before the freeze):
-  `D:\RULModel\.venv\Scripts\python.exe -m rulfuse.cli omnifuser-report --players force tool chip`.
+  `D:\RULModel\.venv\Scripts\python.exe -m rulfuse.cli omnifuser-report --players force tool`.
 - Record the fits, the test table and the comparison with B2 in `PROJECT_LOG.md`.
 
 ## 14. Watch, resume and cancel
@@ -722,7 +731,7 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 | J3 alone | `sbatch --job-name=J3-feature-check slurm/cpu.sbatch rulfuse feature-check` |
 | Store details | `rulfuse store-info` |
 | A long job in parts | `bash slurm/chain.sh N --job-name=NAME slurm/job.sbatch COMMAND …` |
-| B6 full run + report | `bash slurm/omnifuser_rul.sh force tool chip` (the admitted photo types) |
-| B6 report again (test included from 2026-12-01) | `sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip` |
+| B6 full run + report | `bash slurm/omnifuser_rul.sh force tool` (the admitted photo types: tool, readmitted by D24) |
+| B6 report again (test included from 2026-12-01) | `sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool` |
 | B6 report with the test before the freeze | the same with `--unseal` before the players (recorded in the report) |
 | Copy home | §13 |

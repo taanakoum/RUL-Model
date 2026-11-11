@@ -1,8 +1,8 @@
 #!/bin/bash
 # Body of the B6 report job (docs/RUCHE_RUNBOOK.md §12.2), run on a CPU node. Submitted by
 # slurm/omnifuser_rul.sh after the training; to run it again by hand:
-#   sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool chip
-#   sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh --unseal force tool chip
+#   sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh force tool
+#   sbatch --job-name=b6-report slurm/cpu.sbatch bash slurm/omnifuser_results.sh --unseal force tool
 # The players are those of the run; options after "--" must be the run's own (they select
 # its fits). Test results are included on or after the design freeze (2026-12-01, D15);
 # --unseal includes them earlier, and REPORT.md records that it was used.

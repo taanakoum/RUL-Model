@@ -1011,3 +1011,56 @@ end of November 2026. Results must be copied home (runbook §13) before then.
 **Suggested commit (you commit):** "Fix the weight revision lookup for weights-only caches":
 `rulfuse/features/encoders.py`, `tests/test_encoders.py`, `docs/RUCHE_RUNBOOK.md`,
 `PROJECT_LOG.md`.
+
+## Stage 3 finished; tool photos readmitted (D24, 2026-11-11)
+
+**Stage 3 on Ruche.** With the revision-lookup fix, J0, J2 and J3 ran.
+
+- The Mantis-8M and DINOv2-B caches are complete.
+- Force: go.
+- The feature check found all three photo types informative and excluded all three for
+  leaking the stage label (report `nonastreda-3e357b5a23ff.json`).
+
+**Leakage counts:** in how many of 10 tools a `tool_label` stage boundary is the largest
+run-to-run step; the limit is 3.
+
+| | PC1 | PC2 | PC3 | Wear readout | Probe MAE (mean predictor 35.8) | Shuffled |
+|---|---|---|---|---|---|---|
+| True wear (`hi_reference`) | – | – | – | 3 | – | – |
+| Force signals | 2 | 2 | 1 | 1 | – | – |
+| Workpiece | 10 | 10 | 0 | 10 | 14.9 | 32.7 |
+| Chip | 6 | 3 | 2 | 7 | 19.4 | 34.1 |
+| Tool | 1 | 4 | 2 | 3 | 21.7 | 35.9 |
+
+**Your decision (D24): readmit tool photos only.**
+
+- Workpiece and chip are stage-locked, well beyond the true wear's own count, and stay out.
+- Tool crossed the limit by one tool on one of four statistics, and its readout behaves
+  like the true wear.
+- The decision was made before any RUL result.
+
+**Implemented:**
+
+- `configs/feature_check_overrides.json` records the readmission: who, when, which report,
+  and why.
+- `rulfuse.features.check.admitted_image_types` returns the kept types plus the readmitted
+  ones. It refuses types the report never examined.
+- B6's submit guard reads both.
+- Tests: `tests/test_feature_overrides.py`, against the real decisions file.
+- Dry run with a fake `sbatch`: `force tool` submits `b6-train` and `b6-report` with
+  `--players force tool`; `force tool chip` is refused.
+
+**Docs:**
+
+- Project plan D24.
+- B6 plan O5: force + tool + usage, OmniFuser's original pairing.
+- Runbook §11.5 (the narrow-exclusion case), §12.1, §12.2, §13 and the cheat sheet; the
+  run's arm folder is now `force+tool`.
+
+**Next on Ruche:** `bash slurm/omnifuser_rul.sh force tool`.
+
+**Suggested commit (you commit):** "D24: readmit tool photos; record feature-check overrides":
+
+- new: `configs/feature_check_overrides.json`, `tests/test_feature_overrides.py`;
+- `rulfuse/features/check.py`, `slurm/omnifuser_rul.sh`, `slurm/omnifuser_results.sh`;
+- `PROJECT_PLAN.md`, `docs/OMNIFUSER_RUL_PLAN.md`, `docs/RUCHE_RUNBOOK.md`, `PROJECT_LOG.md`.
