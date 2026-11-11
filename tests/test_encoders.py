@@ -100,3 +100,24 @@ def test_real_dinov2_loads_offline():
     encoder = DinoV2Encoder(device="cpu", batch_size=2)
     assert encoder.dim == 768
     assert encoder.encode(np.zeros((1, 3, 224, 224), np.float32)).shape == (1, 9, 768)
+
+
+def test_a_weights_only_cache_still_gives_the_revision(tmp_path, monkeypatch):
+    """Ruche, 2026-11-11: the prefetch caches only *.json and *.safetensors, and
+    huggingface_hub raised IncompleteSnapshotError (README, logo missing) for an unfiltered
+    local lookup, so J0 saw no revision. The lookup must work on such a cache."""
+    from huggingface_hub import constants
+
+    commit = "bc7d5ab40c02133386a28e2c127f35c17c86901d"
+    folder = tmp_path / "models--org--model"
+    (folder / "refs").mkdir(parents=True)
+    (folder / "refs" / "main").write_text(commit)
+    snapshot = folder / "snapshots" / commit
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}")
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    assert hf_revision("org/model") is None  # no weight file yet
+    (snapshot / "model.safetensors").write_bytes(b"0")
+    assert hf_revision("org/model") == commit
+    assert hf_revision("org/absent") is None

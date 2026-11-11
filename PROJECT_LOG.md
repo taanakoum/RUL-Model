@@ -984,3 +984,30 @@ encodings":
 - `slurm/omnifuser_rul.sh`;
 - `docs/OMNIFUSER_RUL_PLAN.md`, `docs/RUCHE_RUNBOOK.md`, `PROJECT_PLAN.md`,
   `PROJECT_LOG.md`.
+
+## Ruche J0 failed: the weight revision lookup (2026-11-11)
+
+**Symptom.** Three J0 attempts stopped with `AssertionError: paris-noah/Mantis-8M: no cached
+revision`. J2 stayed `DependencyNeverSatisfied` and J3 kept waiting. J0 had already built
+the force store and the segment store (5,125 segments, 1,536 images).
+
+**Cause.** The weights were cached (Mantis-8M snapshot `bc7d5ab`), and the encoders loaded
+offline. `hf_revision` called `snapshot_download(repo, local_files_only=True)` without
+patterns. Ruche's huggingface_hub then raised `IncompleteSnapshotError`, because the
+prefetch caches only `*.json` and `*.safetensors` (README, `.gitattributes` and the logo
+are not needed). The function swallowed the error and returned None.
+
+**Fix.**
+
+- `rulfuse/features/encoders.py`: `hf_revision` looks up the same patterns as the prefetch
+  (`WEIGHT_PATTERNS`). It falls back to the cache's `refs/main`, and requires a
+  `*.safetensors` file in the snapshot.
+- Test: `tests/test_encoders.py::test_a_weights_only_cache_still_gives_the_revision`.
+- Runbook §15: a troubleshooting row.
+
+**Ruche end of life.** Ruche's login banner says it will be replaced: back up data by the
+end of November 2026. Results must be copied home (runbook §13) before then.
+
+**Suggested commit (you commit):** "Fix the weight revision lookup for weights-only caches":
+`rulfuse/features/encoders.py`, `tests/test_encoders.py`, `docs/RUCHE_RUNBOOK.md`,
+`PROJECT_LOG.md`.

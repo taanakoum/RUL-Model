@@ -671,6 +671,7 @@ whatever finished (§13). Write the log entry.
 | `DependencyNeverSatisfied` | An earlier job of the chain failed | Read its log; `scancel` the waiting jobs; resubmit |
 | `oom-kill`, `Exceeded job memory limit` | More than 32 GB of RAM | Add `--mem=64G` before the script name |
 | `DUE TO TIME LIMIT`, state `TIMEOUT` | The walltime ran out | Resubmit the same job: it resumes |
+| J0: `AssertionError: paris-noah/Mantis-8M: no cached revision`, although `prefetch_weights.sh` ran | Before 2026-11-11, the revision lookup asked for the whole snapshot. huggingface_hub 1.x refuses that (`IncompleteSnapshotError`) when README or image files are absent, and the prefetch caches only `*.json` and `*.safetensors` | `git pull` (the lookup now uses the same file patterns). Check with `HF_HUB_OFFLINE=1 python -c "from rulfuse.features.encoders import hf_revision as r; print(r('paris-noah/Mantis-8M'), r('facebook/dinov2-base'))"`, which should print two hashes. Then `scancel` the waiting J2 and J3, and run `bash slurm/stage3.sh` again |
 | `Disk quota exceeded` | Home or workdir full | `ruche-quota`; check the `~/.conda` link (§4); `rm -rf ~/.cache/pip` |
 | `git clone` fails | No GitHub access, or a private repository without a token | A token (§5), or the archive route |
 | `sha256sum: WARNING: 1 listed file could not be read` | The checksum file has Windows line endings | Make it again with `scripts\pack_for_ruche.ps1` (it writes LF) |

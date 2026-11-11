@@ -22,13 +22,32 @@ DINOV2_REPO = "facebook/dinov2-base"
 WINDOW = 512  # Mantis's input length
 
 
+WEIGHT_PATTERNS = ["*.json", "*.safetensors"]  # what slurm/prefetch_weights.sh downloads
+
+
 def hf_revision(repo: str) -> str | None:
-    """Commit hash of the cached snapshot of ``repo`` (None if it is not cached)."""
+    """Commit hash of the cached snapshot of ``repo`` (None if no weights are cached).
+
+    Only the files the loaders read are cached (``WEIGHT_PATTERNS``). huggingface_hub 1.x
+    raises ``IncompleteSnapshotError`` for an unfiltered local lookup when other repo files
+    (README, images) are absent, so the lookup uses the same patterns, and falls back to the
+    cache's ``refs/main`` with at least one weight file in its snapshot."""
     try:
         from huggingface_hub import snapshot_download
 
-        return Path(snapshot_download(repo, local_files_only=True)).name
-    except Exception:  # noqa: BLE001 - not cached, offline, or no hub installed
+        path = Path(snapshot_download(repo, local_files_only=True, allow_patterns=WEIGHT_PATTERNS))
+        if any(path.glob("*.safetensors")):
+            return path.name
+    except Exception:  # noqa: BLE001 - not cached, offline, or another hub version
+        pass
+    try:
+        from huggingface_hub import constants
+
+        folder = Path(constants.HF_HUB_CACHE) / ("models--" + repo.replace("/", "--"))
+        revision = (folder / "refs" / "main").read_text(encoding="utf-8").strip()
+        snapshot = folder / "snapshots" / revision
+        return revision if any(snapshot.glob("*.safetensors")) else None
+    except Exception:  # noqa: BLE001 - no cache, or no hub installed
         return None
 
 
