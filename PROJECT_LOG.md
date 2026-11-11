@@ -1064,3 +1064,51 @@ run-to-run step; the limit is 3.
 - new: `configs/feature_check_overrides.json`, `tests/test_feature_overrides.py`;
 - `rulfuse/features/check.py`, `slurm/omnifuser_rul.sh`, `slurm/omnifuser_results.sh`;
 - `PROJECT_PLAN.md`, `docs/OMNIFUSER_RUL_PLAN.md`, `docs/RUCHE_RUNBOOK.md`, `PROJECT_LOG.md`.
+
+## B6 full run: results (2026-11-11)
+
+**Jobs.** Commit `71da7b1`, store `nonastreda/6e0cb095967b`, `force tool`.
+
+- `b6-train` 2493824: 30 of 30 fits, median 448 s each.
+- `b6-report` 2493825: sealed.
+- `b6-report` 2494379: run by you with `--unseal`, so the test was read before the freeze.
+  B6 is a stand-alone baseline; under D15, no RUL-Fuse design decision may use these
+  numbers before 2026-12-01.
+- Archives `b6-results-20261111-2040` and `-2120`: both hashes match. The second is
+  unpacked in `D:\RULModel\runs\omnifuser_rul\`.
+
+**Test results** (current mode, mean over the 10 test tools):
+
+| | B6 | B2 | B0 (constant) | B1 |
+|---|---|---|---|---|
+| Window MAE (s) | 587.4 (CI 411.7 to 801.7) | 467.8 | 412.0 | 512.5 |
+
+- Against B2, B6 is worse by 119.6 s (CI −281.6 to +33.1) and better on 3 of 10 tools.
+- Asymmetric score 196.3 against 46.7 for B2.
+- 35 % of 1 s steps rise.
+- Validation window MAE 540.1 (B2 464.7).
+
+**Inference modes:** neither mode is clearly better, on test and on validation.
+
+- Test, context − current: +0.4 s (CI −20.2 to 18.7).
+- Validation: −8.6 s (CI −35.5 to 12.6).
+- The context mode lowers the bias (−35 s) and the asymmetric score, but more of its
+  1 s steps rise (0.48 against 0.35).
+
+**What the trajectories show:**
+
+- The decline is tracked on T3, T6–T9, but starts about 5–10 min early (pessimistic).
+- Wear is missed on T4 and T5: the prediction stays at the cap.
+- On T1 and T10 the prediction falls to only about 1,200 s.
+- T2 is far too pessimistic from minute 15.
+- The tools split into strongly late and strongly early errors, so the mean bias is small
+  but meaningless.
+
+**Why: over-fitting to the 8 training tools.**
+
+- Median training MSE falls 50× (0.092 → 0.0018).
+- The validation MAE barely moves: median 402 s at epoch 1, best 310 s, last 376 s. The
+  curve is noisy, so the epoch picked on one validation tool is optimistic (validation 540
+  against test 587).
+- Expected for an end-to-end OmniFuser with ten tools.
+- B6 stays one fixed setting (O-decisions): this is its result. It is not tuned.

@@ -631,9 +631,14 @@ scp "${Ruche}:/workdir/$RucheLogin/RUL-Model/runs/logs/*" D:\RULModel\runs\ruche
 ```powershell
 scp "${Ruche}:/workdir/$RucheLogin/b6-results-*.tar.gz*" D:\RULModel\transfer\
 cd D:\RULModel\transfer
-(Get-FileHash .\b6-results-<date>.tar.gz -Algorithm SHA256).Hash.ToLower()   # equal to the .sha256 file
-tar -xzf .\b6-results-<date>.tar.gz -C D:\RULModel\runs
+$a = (Get-ChildItem .\b6-results-*.tar.gz | Sort-Object Name | Select-Object -Last 1).Name
+$a; (Get-FileHash $a -Algorithm SHA256).Hash.ToLower() -eq (Get-Content "$a.sha256").Split(" ")[0]   # True
+tar -xzf $a -C D:\RULModel\runs
 ```
+
+- These lines take the newest archive; each report job writes its own, named by date and
+  time (`b6-results-YYYYMMDD-HHMM.tar.gz`), and the newest holds everything the older ones
+  do. The second line must print `True`.
 
 - The report is
   `D:\RULModel\runs\omnifuser_rul\nonastreda-<store>\force+tool\report\REPORT.md`,
