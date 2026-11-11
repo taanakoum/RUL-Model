@@ -1,0 +1,18 @@
+{
+ "description": "Gate 2a (PROJECT_PLAN.md §7.5, decisions 2-3): learning rate of each family (Rule B), then F1 against F0 at their best (Rule B; F0 preferred within half the threshold, its weights read as modality importance). Job J5.",
+ "store": "nonastreda/3e357b5a23ff",
+ "signal_encoder": "mantis8m",
+ "image_encoder": "dinov2b",
+ "base": {"players": ["signal", "tool"]},
+ "inherits": [],
+ "seeds": [0, 1, 2],
+ "arms": {
+  "F1-lr3e-4": {"fusion": "F1", "lr": 0.0003},
+  "F1-lr1e-3": {"fusion": "F1", "lr": 0.001},
+  "F1-lr3e-3": {"fusion": "F1", "lr": 0.003},
+  "F0-lr3e-4": {"fusion": "F0", "lr": 0.0003},
+  "F0-lr1e-3": {"fusion": "F0", "lr": 0.001},
+  "F0-lr3e-3": {"fusion": "F0", "lr": 0.003}
+ },
+ "decision": {"type": "lr_then_family", "threshold_s": 10.0, "cost": {"F0": 0.0, "F1": 1.0}}
+}

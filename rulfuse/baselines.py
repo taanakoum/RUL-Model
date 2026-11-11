@@ -242,9 +242,7 @@ def _unit_curve(
     return end[ok], hi[ok], float(hi[-1])
 
 
-def fit_prior(
-    store: SegmentStore, train: Sequence[str], column: str = "hi"
-) -> DegradationPrior:
+def fit_prior(store: SegmentStore, train: Sequence[str], column: str = "hi") -> DegradationPrior:
     """The degradation prior of PROJECT_PLAN.md §8 on the training units' HI (``column``)."""
     curves = [c for c in (_unit_curve(store, u, column) for u in train) if c is not None]
     return DegradationPrior.fit([(t, h) for t, h, _ in curves], [f for _, _, f in curves])

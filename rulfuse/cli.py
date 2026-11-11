@@ -386,6 +386,72 @@ def _add_dataset_options(p: argparse.ArgumentParser, segment_s: float = 10.0) ->
     )
 
 
+
+def _device(name: str) -> str:
+    if name != "auto":
+        return name
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def cmd_manifest(args: argparse.Namespace) -> int:
+    from rulfuse.study import Study, open_store, write_manifest
+
+    study = Study.load(args.study)
+    store = open_store(study.spec)
+    path = write_manifest(study, store.unit_names, args.runs_root)
+    n = sum(1 for _ in path.open(encoding="utf-8")) - 1
+    print(f"{path}: {n} tasks ({len(study.arms)} arms; seeds {study.seeds})")
+    print(f"submit: sbatch --array=0-{n - 1}%4 slurm/array.sbatch {args.study}")
+    return 0
+
+
+def cmd_run_task(args: argparse.Namespace) -> int:
+    from rulfuse.study import Study, run_task
+
+    study = Study.load(args.study)
+    for task in args.task:
+        run_task(study, task, _device(args.device), args.runs_root)
+    return 0
+
+
+def cmd_aggregate(args: argparse.Namespace) -> int:
+    from rulfuse.study import Study, aggregate
+
+    study = Study.load(args.study)
+    decision = aggregate(study, args.runs_root)
+    if not decision.get("complete"):
+        print(f"incomplete: {len(decision['missing'])} arm/fold cells missing")
+        return 1
+    for arm, mae in decision["means"].items():
+        print(f"{arm:28s} validation window MAE {mae:7.1f} s")
+    print(f"adopted: {decision['adopted']}")
+    return 0
+
+
+def cmd_sanity(args: argparse.Namespace) -> int:
+    from rulfuse.config import FitConfig
+    from rulfuse.features.cache import ImageFeatures, SignalFeatures, find_features
+    from rulfuse.sanity import run_checks
+    from rulfuse.study import Study, open_store
+
+    study = Study.load(args.study)
+    store = open_store(study.spec)
+    sig = SignalFeatures.open(find_features(store, "signal", study.spec["signal_encoder"]))
+    img = ImageFeatures.open(find_features(store, "image", study.spec["image_encoder"]))
+    base = FitConfig().with_overrides(study.spec.get("base", {}))
+    if args.steps:
+        base = base.with_overrides({"max_steps": base.phase_a_steps + args.steps})
+    out = (args.runs_root or paths.runs_dir()) / "sanity"
+    report = run_checks(store, sig, img, base, out, args.checks, _device(args.device))
+    for k, v in report.items():
+        if isinstance(v, dict):
+            print(f"check {k}: {'pass' if v['pass'] else 'FAIL'} {v}")
+    print(f"all pass: {report['all_pass']}  ({out / 'report.json'})")
+    return 0 if report["all_pass"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rulfuse")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -490,6 +556,31 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("hub-check", help="planned checkpoints exist / gated (metadata only)")
     p.add_argument("--out", type=Path, default=paths.runs_dir() / "verify" / "hub-check.json")
     p.set_defaults(func=cmd_hub_check)
+
+    p = sub.add_parser("manifest", help="RUL-Fuse: write a study's task manifest")
+    p.add_argument("--study", required=True)
+    p.add_argument("--runs-root", type=Path, default=None, help="default: <data>/runs")
+    p.set_defaults(func=cmd_manifest)
+
+    p = sub.add_parser("run-task", help="RUL-Fuse: run the fits of manifest lines")
+    p.add_argument("--study", required=True)
+    p.add_argument("--task", type=int, nargs="+", required=True)
+    p.add_argument("--device", default="auto")
+    p.add_argument("--runs-root", type=Path, default=None)
+    p.set_defaults(func=cmd_run_task)
+
+    p = sub.add_parser("aggregate", help="RUL-Fuse: ensembles, validation scores, gate decision")
+    p.add_argument("--study", required=True)
+    p.add_argument("--runs-root", type=Path, default=None)
+    p.set_defaults(func=cmd_aggregate)
+
+    p = sub.add_parser("sanity", help="RUL-Fuse: the seven Stage-4 sanity checks")
+    p.add_argument("--study", default="pilot", help="study whose store, caches and base to use")
+    p.add_argument("--checks", type=int, nargs="+", default=[1, 2, 3, 4, 5, 6, 7])
+    p.add_argument("--steps", type=int, default=None, help="phase-B steps (short local runs)")
+    p.add_argument("--device", default="auto")
+    p.add_argument("--runs-root", type=Path, default=None)
+    p.set_defaults(func=cmd_sanity)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

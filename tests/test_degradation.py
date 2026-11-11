@@ -46,7 +46,10 @@ def _unit(life: float, gamma: float, n: int = 40, noise: float = 0.0, seed: int 
 def _prior(noise: float = 0.5) -> DegradationPrior:
     lives = [900.0, 1000.0, 1100.0, 950.0, 1050.0, 1000.0]
     gammas = [1.6, 1.5, 1.7, 1.55, 1.65, 1.6]
-    units = [_unit(l, g, noise=noise, seed=i) for i, (l, g) in enumerate(zip(lives, gammas))]
+    units = [
+        _unit(life, g, noise=noise, seed=i)
+        for i, (life, g) in enumerate(zip(lives, gammas, strict=True))
+    ]
     return DegradationPrior.fit(units, [THETA] * len(units))
 
 
@@ -193,9 +196,9 @@ def test_b4_scaling_uses_only_the_training_units(toy_run):
     store, signal, _ = toy_run
     fold = leave_one_unit_out(store.unit_names)[0]
     base = b4_fold(store, fold, signal)
-    expected = np.concatenate(
-        [unit_level_features(store, signal, u)[1] for u in fold.train]
-    ).mean(axis=0)
+    expected = np.concatenate([unit_level_features(store, signal, u)[1] for u in fold.train]).mean(
+        axis=0
+    )
     np.testing.assert_allclose(base.info["scaler_mean_abs"], expected)
     for unit in (fold.validation, fold.test):  # wreck the held-out units' descriptors
         rows, *_ = unit_level_features(store, signal, unit)

@@ -172,10 +172,9 @@ def _forecast(
     w /= w.sum()
     rul_sorted, w_sorted = rul[order], w[order]
     cum = np.cumsum(w_sorted)
-    lo, hi = (
-        float(rul_sorted[min(int(np.searchsorted(cum, q)), len(cum) - 1)]) for q in LEVELS
-    )
-    return Forecast(float(w @ rul), lo, hi, float(1.0 / np.sum(w**2)))
+    lo, hi = (float(rul_sorted[min(int(np.searchsorted(cum, q)), len(cum) - 1)]) for q in LEVELS)
+    mean = float(np.clip(w @ rul, rul.min(), rul.max()))  # no rounding past the clip
+    return Forecast(mean, lo, hi, float(1.0 / np.sum(w**2)))
 
 
 def predict_rul_many(
@@ -222,6 +221,12 @@ def predict_rul(
     order = np.argsort(tau_hist, kind="stable")
     tau_hist, hi_hist = tau_hist[order], hi_hist[order]
     return predict_rul_many(
-        prior, tau_hist, hi_hist, np.array([tau_now]), np.array([len(tau_hist)]), horizon_s,
-        draws, seed,
+        prior,
+        tau_hist,
+        hi_hist,
+        np.array([tau_now]),
+        np.array([len(tau_hist)]),
+        horizon_s,
+        draws,
+        seed,
     )[0]
