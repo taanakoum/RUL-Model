@@ -126,7 +126,7 @@ def test_inner_folds_disjoint_cover_and_deterministic():
     folds = inner_folds(train, n_inner=4, seed=3)
     assert len(folds) == 4
     held = [u for h, _ in folds for u in h]
-    assert sorted(held) == sorted(train) and len(set(held)) == len(held)
+    assert sorted(map(str, held)) == sorted(map(str, train)) and len(set(held)) == len(held)
     for h, fit in folds:
         assert len(h) == 2 and len(fit) == 6
         assert not set(h) & set(fit)

@@ -28,6 +28,7 @@ source slurm/env.sh
 set -eo pipefail
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export CUBLAS_WORKSPACE_CONFIG=:4096:8  # deterministic cuBLAS (rulfuse.train.seed_everything)
 echo "job ${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID} ($SLURM_JOB_NAME) on $(hostname), started $(date)"
 echo "commit: $(git log -1 --oneline 2>/dev/null || echo unknown)"
 python -m rulfuse.cli run-task --study "$1" --task "$SLURM_ARRAY_TASK_ID" --device cuda

@@ -17,7 +17,20 @@ from rulfuse.tokens import build_fold_data
 from rulfuse.train import loss_terms, predict
 from tests.toy_engine import TINY, build_toy
 
-FIELDS = ("seg", "tau", "elapsed", "entry", "present", "point", "rul", "y", "window", "weight", "hi", "oracle")
+FIELDS = (
+    "seg",
+    "tau",
+    "elapsed",
+    "entry",
+    "present",
+    "point",
+    "rul",
+    "y",
+    "window",
+    "weight",
+    "hi",
+    "oracle",
+)
 
 
 @pytest.fixture(scope="module")
@@ -30,7 +43,13 @@ def setup(tmp_path_factory):
         data = build_fold_data(t.store, t.signal, t.image, fold, cfg)
         torch.manual_seed(0)
         model = build_model(cfg, data, t.store.settings.horizon_s).eval()
-        out[fusion] = (cfg, data, model, FoldTensors(data, [fold.validation], "cpu"), fold.validation)
+        out[fusion] = (
+            cfg,
+            data,
+            model,
+            FoldTensors(data, [fold.validation], "cpu"),
+            fold.validation,
+        )
     return out
 
 
@@ -39,7 +58,11 @@ def _truncate(seq, cut):
     for name in FIELDS:
         setattr(short, name, getattr(seq, name)[:cut])
     keep = seq.img_time < seq.tau[cut - 1]
-    short.img, short.img_time, short.img_entry = seq.img[keep], seq.img_time[keep], seq.img_entry[keep]
+    short.img, short.img_time, short.img_entry = (
+        seq.img[keep],
+        seq.img_time[keep],
+        seq.img_entry[keep],
+    )
     return short
 
 
@@ -101,7 +124,9 @@ def test_student_t_head_ranges_and_nll():
     assert ((mu > 0) & (mu < 1)).all() and (sigma >= 0.005).all() and (nu >= 3).all()
     y = torch.randn(50)
     ours = student_t_nll(y, mu, sigma, nu).detach().numpy()
-    ref = -stats.t.logpdf(y.numpy(), nu.detach().numpy(), mu.detach().numpy(), sigma.detach().numpy())
+    ref = -stats.t.logpdf(
+        y.numpy(), nu.detach().numpy(), mu.detach().numpy(), sigma.detach().numpy()
+    )
     assert np.allclose(ours, ref, atol=1e-4)
 
 
@@ -123,5 +148,6 @@ def test_nll_never_moves_the_mean(setup):
     w = batch["weight"] * batch["point"]
     mse = ((mu - y) ** 2 * w).sum() / w.sum()
     mse.backward()
+    assert mu.grad is not None
     assert torch.allclose(g_total, mu.grad, atol=1e-7)
     model.eval()

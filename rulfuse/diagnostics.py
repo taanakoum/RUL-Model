@@ -97,20 +97,29 @@ def fit_diagnostics(
     failures = np.array([store.units[u]["failure_s"] for u in train if store.units[u]["failure_s"]])
     keep = seq.window
     y = seq.rul[keep]
-    b2_mae = float(np.mean(np.abs(b2(failures, seq.tau[keep], horizon) - y))) if keep.any() else None
+    b2_mae = (
+        float(np.mean(np.abs(b2(failures, seq.tau[keep], horizon) - y))) if keep.any() else None
+    )
     b0_mae = float(np.mean(np.abs(horizon / 2 - y))) if keep.any() else None
     model_mae = window_mae(val)
     reliance = {}
-    for name, overrides in (("signal", {"players": tuple(p for p in config.players if p != "signal")}),
-                            ("images", {"players": tuple(p for p in config.players if p == "signal")}),
-                            ("usage", {"usage": False})):
+    for name, overrides in (
+        ("signal", {"players": tuple(p for p in config.players if p != "signal")}),
+        ("images", {"players": tuple(p for p in config.players if p == "signal")}),
+        ("usage", {"usage": False}),
+    ):
         masked = config.with_overrides(overrides)
         old = model.config
         model.config = masked
         try:
             reliance[name] = window_mae(
-                predict(model, make_sequence(data.units[fold.validation], None, config.w_far),
-                        tensors[fold.validation], masked, n_ch)
+                predict(
+                    model,
+                    make_sequence(data.units[fold.validation], None, config.w_far),
+                    tensors[fold.validation],
+                    masked,
+                    n_ch,
+                )
             )
         finally:
             model.config = old
@@ -140,7 +149,9 @@ def fit_diagnostics(
         warnings.append("cap saturation on the validation unit")
     alpha = None
     if val.alpha is not None:
-        alpha = dict(zip(("usage", "signal", "image"), val.alpha[seq.point].mean(0).tolist(), strict=True))
+        alpha = dict(
+            zip(("usage", "signal", "image"), val.alpha[seq.point].mean(0).tolist(), strict=True)
+        )
     return {
         "validation_unit": fold.validation,
         "validation_window_mae_s": model_mae,

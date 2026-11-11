@@ -33,7 +33,7 @@ import torch
 from rulfuse.config import FitConfig
 from rulfuse.core.folds import leave_one_unit_out
 from rulfuse.core.store import SegmentStore
-from rulfuse.sequences import FoldTensors, collate, make_sequence
+from rulfuse.sequences import FoldTensors, make_sequence
 from rulfuse.tokens import build_fold_data
 from rulfuse.train import fit, predict
 
@@ -45,8 +45,15 @@ def _diag(out: Path) -> dict:
 def check_overfit(store, sig, img, base: FitConfig, out: Path, device: str) -> dict:
     fold = leave_one_unit_out(store.unit_names)[0]
     cfg = base.with_overrides(
-        {"regularize": False, "dropout": 0.0, "weight_decay": 0.0, "phase_a": False,
-         "patience": 10_000, "copies": 1, "max_steps": base.phase_a_steps + 300}
+        {
+            "regularize": False,
+            "dropout": 0.0,
+            "weight_decay": 0.0,
+            "phase_a": False,
+            "patience": 10_000,
+            "copies": 1,
+            "max_steps": base.phase_a_steps + 300,
+        }
     )
     sel = fit(store, sig, img, fold, 0, cfg, out, device, train_units=[fold.train[0]])
     train_mae = min(e["train_mae_s"] for e in sel["evaluations"])
@@ -63,7 +70,11 @@ def check_permuted(store, sig, img, base: FitConfig, out: Path, device: str) -> 
     for u, v in zip(train, perm, strict=True):
         unit = data.units[u]
         new = unit.rec_start[0] + lives[str(v)]
-        lo = unit.rec_end[unit.rec_baseline].max() + 1.0 if unit.rec_baseline.any() else unit.rec_end[0]
+        lo = (
+            unit.rec_end[unit.rec_baseline].max() + 1.0
+            if unit.rec_baseline.any()
+            else unit.rec_end[0]
+        )
         unit.failure_s = float(np.clip(new, lo, unit.rec_end[-1]))
     fit(store, sig, img, fold, 0, base, out, device, data=data)
     d = _diag(out)
@@ -80,16 +91,22 @@ def check_usage_only(store, sig, img, base: FitConfig, out: Path, device: str) -
     fit(store, sig, img, fold, 0, cfg, out, device)
     d = _diag(out)
     gap = d["validation_window_mae_s"] - d["b2_window_mae_s"]
-    return {"validation_mae_s": d["validation_window_mae_s"], "b2_mae_s": d["b2_window_mae_s"],
-            "pass": abs(gap) <= 20.0}
+    return {
+        "validation_mae_s": d["validation_window_mae_s"],
+        "b2_mae_s": d["b2_window_mae_s"],
+        "pass": abs(gap) <= 20.0,
+    }
 
 
 def check_oracle(store, sig, img, base: FitConfig, out: Path, device: str) -> dict:
     fold = leave_one_unit_out(store.unit_names)[0]
     fit(store, sig, img, fold, 0, base.with_overrides({"oracle_hi": True}), out, device)
     d = _diag(out)
-    return {"validation_mae_s": d["validation_window_mae_s"], "b2_mae_s": d["b2_window_mae_s"],
-            "pass": d["validation_window_mae_s"] < 0.8 * d["b2_window_mae_s"]}
+    return {
+        "validation_mae_s": d["validation_window_mae_s"],
+        "b2_mae_s": d["b2_window_mae_s"],
+        "pass": d["validation_window_mae_s"] < 0.8 * d["b2_window_mae_s"],
+    }
 
 
 def check_toy(base: FitConfig, out: Path, device: str) -> dict:
@@ -101,16 +118,21 @@ def check_toy(base: FitConfig, out: Path, device: str) -> dict:
     root = Path(tempfile.mkdtemp())
     ds = toy.build(root / "images", n_units=6)
     store = SegmentStore.open(build_segment_store(ds, root / "store"))
-    sig = extract_signal_features(store, ds.signals, ProjectionEncoder(), root=root / "f", log=lambda *_: None)
+    sig = extract_signal_features(
+        store, ds.signals, ProjectionEncoder(), root=root / "f", log=lambda *_: None
+    )
     img = extract_image_features(store, PixelStatsEncoder(), root=root / "f", log=lambda *_: None)
     fold = leave_one_unit_out(store.unit_names)[0]
     cfg = base.with_overrides({"players": ("signal", "surface")})
     fit(store, sig, img, fold, 0, cfg, out, device)
     d = _diag(out)
     cov = d["coverage90_by_eval"][-1] if d["coverage90_by_eval"] else float("nan")
-    return {"validation_mae_s": d["validation_window_mae_s"], "b2_mae_s": d["b2_window_mae_s"],
-            "coverage90": cov,
-            "pass": d["validation_window_mae_s"] < d["b2_window_mae_s"] and 0.8 <= cov <= 0.98}
+    return {
+        "validation_mae_s": d["validation_window_mae_s"],
+        "b2_mae_s": d["b2_window_mae_s"],
+        "coverage90": cov,
+        "pass": d["validation_window_mae_s"] < d["b2_window_mae_s"] and 0.8 <= cov <= 0.98,
+    }
 
 
 def check_truncation(store, sig, img, base: FitConfig, device: str) -> dict:
@@ -128,12 +150,28 @@ def check_truncation(store, sig, img, base: FitConfig, device: str) -> dict:
         full = make_sequence(unit)
         cut = len(full.seg) // 2
         short = copy.copy(full)
-        for name in ("seg", "tau", "elapsed", "entry", "present", "point", "rul", "y", "window",
-                     "weight", "hi", "oracle"):
+        for name in (
+            "seg",
+            "tau",
+            "elapsed",
+            "entry",
+            "present",
+            "point",
+            "rul",
+            "y",
+            "window",
+            "weight",
+            "hi",
+            "oracle",
+        ):
             setattr(short, name, getattr(full, name)[:cut])
         t_cut = full.tau[cut - 1]
         keep = full.img_time < t_cut
-        short.img, short.img_time, short.img_entry = full.img[keep], full.img_time[keep], full.img_entry[keep]
+        short.img, short.img_time, short.img_entry = (
+            full.img[keep],
+            full.img_time[keep],
+            full.img_entry[keep],
+        )
         a = predict(model, full, tensors, cfg, len(data.channels))
         b = predict(model, short, tensors, cfg, len(data.channels))
         worst = max(worst, float(np.max(np.abs(a.mu_s[:cut] - b.mu_s))))
@@ -170,7 +208,9 @@ def run_checks(
         elif k == 2:
             report[k] = check_permuted(store, signal_features, image_features, base, target, device)
         elif k == 3:
-            report[k] = check_usage_only(store, signal_features, image_features, base, target, device)
+            report[k] = check_usage_only(
+                store, signal_features, image_features, base, target, device
+            )
         elif k == 4:
             report[k] = check_oracle(store, signal_features, image_features, base, target, device)
         elif k == 5:
@@ -178,8 +218,14 @@ def run_checks(
         elif k == 6:
             report[k] = check_truncation(store, signal_features, image_features, base, device)
         elif k == 7:
-            report[k] = check_determinism(store, signal_features, image_features, replace(base), target)
-        (out_dir / "report.json").write_text(json.dumps(report, indent=1, default=float), encoding="utf-8")
+            report[k] = check_determinism(
+                store, signal_features, image_features, replace(base), target
+            )
+        (out_dir / "report.json").write_text(
+            json.dumps(report, indent=1, default=float), encoding="utf-8"
+        )
     report["all_pass"] = all(v["pass"] for v in report.values() if isinstance(v, dict))
-    (out_dir / "report.json").write_text(json.dumps(report, indent=1, default=float), encoding="utf-8")
+    (out_dir / "report.json").write_text(
+        json.dumps(report, indent=1, default=float), encoding="utf-8"
+    )
     return report

@@ -53,7 +53,7 @@ def test_wilcoxon_matches_scipy_and_hand_p():
     res = S.wilcoxon_paired(a, b, "greater")
     assert res["statistic"] == 55.0
     assert res["p"] == pytest.approx(1 / 1024)  # all ten ranks positive: 1 of 2**10 sign patterns
-    assert res["p"] == pytest.approx(sp_stats.wilcoxon(b - a, alternative="greater").pvalue)
+    assert res["p"] == pytest.approx(sp_stats.wilcoxon(b - a, alternative="greater").pvalue)  # pyright: ignore[reportAttributeAccessIssue]
     assert S.wilcoxon_paired(a, b, "less")["p"] > 0.99
     assert S.wilcoxon_paired(a, b)["p"] == pytest.approx(2 / 1024)
 
@@ -65,8 +65,8 @@ def test_wilcoxon_mixed_signs_against_scipy():
     for alt in ("two-sided", "greater", "less"):
         ref = sp_stats.wilcoxon(b - a, alternative=alt)
         res = S.wilcoxon_paired(a, b, alt)
-        assert res["p"] == pytest.approx(ref.pvalue)
-        assert res["statistic"] == pytest.approx(ref.statistic)
+        assert res["p"] == pytest.approx(ref.pvalue)  # pyright: ignore[reportAttributeAccessIssue]
+        assert res["statistic"] == pytest.approx(ref.statistic)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_wilcoxon_all_zero_differences_gives_p_one():

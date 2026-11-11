@@ -100,7 +100,9 @@ def test_trajectory_augmentation_keeps_baseline_failure_and_images(toy_data):
             # the failure lies inside the failure recording, at the same offset
             k = plan.index(unit.failure_rec)
             start = s.tau[s.entry == k][0] - unit.seg_elapsed[unit.seg_rec == unit.failure_rec][0]
-            assert np.isclose(s.failure_s - start, unit.failure_s - unit.rec_start[unit.failure_rec])
+            assert np.isclose(
+                s.failure_s - start, unit.failure_s - unit.rec_start[unit.failure_rec]
+            )
             # every image follows its recording: available after its last segment
             for when, e in zip(s.img_time, s.img_entry, strict=True):
                 assert when >= s.tau[s.entry == e].max() - 1e-6
@@ -117,4 +119,5 @@ def test_duplicates_follow_their_copy_and_shift_later_recordings(toy_data):
     d = unit.rec_end[p] - unit.rec_start[p]
     first = s.tau[s.entry == p + 1][0] - unit.seg_elapsed[unit.seg_rec == p][0]
     assert np.isclose(first, unit.rec_end[p])
+    assert s.failure_s is not None and unit.failure_s is not None
     assert np.isclose(s.failure_s, unit.failure_s + d)

@@ -386,7 +386,6 @@ def _add_dataset_options(p: argparse.ArgumentParser, segment_s: float = 10.0) ->
     )
 
 
-
 def _device(name: str) -> str:
     if name != "auto":
         return name

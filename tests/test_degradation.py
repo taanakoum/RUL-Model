@@ -184,8 +184,12 @@ def test_b4_is_causal(toy_run):
     rows, *_ = unit_level_features(store, signal, fold.validation)
     cut = len(rows) // 2
     changed = _shifted(signal, rows[cut:], store, 3.0)
-    before = b4_fold(store, fold, signal, predict=(fold.validation,)).predictions[fold.validation]
-    after = b4_fold(store, fold, changed, predict=(fold.validation,)).predictions[fold.validation]
+    before = b4_fold(store, fold, signal, predict=(fold.validation,)).predictions[  # pyright: ignore[reportArgumentType]
+        fold.validation
+    ]
+    after = b4_fold(store, fold, changed, predict=(fold.validation,)).predictions[  # pyright: ignore[reportArgumentType]
+        fold.validation
+    ]
     early = np.isin(before.rows, rows[:cut])
     assert early.any() and (~early).any()
     np.testing.assert_allclose(after.prediction[early], before.prediction[early])
@@ -203,7 +207,7 @@ def test_b4_scaling_uses_only_the_training_units(toy_run):
     for unit in (fold.validation, fold.test):  # wreck the held-out units' descriptors
         rows, *_ = unit_level_features(store, signal, unit)
         wrecked = _shifted(signal, rows, store, 50.0)
-        other = b4_fold(store, fold, wrecked)
+        other = b4_fold(store, fold, wrecked)  # pyright: ignore[reportArgumentType]
         np.testing.assert_allclose(other.info["scaler_mean_abs"], base.info["scaler_mean_abs"])
         assert other.info["alpha"] == base.info["alpha"]
 
@@ -235,6 +239,7 @@ def test_r1_runs_on_the_toy_store(toy_run):
     window = seg["window"][prediction.rows].astype(bool)
     error = np.abs(prediction.prediction[window] - seg["rul_s"][prediction.rows][window])
     assert error.mean() < HORIZON / 2  # the toy HI crosses its threshold at the failure
+    assert prediction.lower is not None and prediction.upper is not None
     assert (prediction.lower <= prediction.upper).all()
 
 

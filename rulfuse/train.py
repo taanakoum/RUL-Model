@@ -60,6 +60,9 @@ MAX_PAIR_OFFSET = 20
 def seed_everything(fold_index: int, seed: int) -> np.random.Generator:
     value = 1000 * (fold_index + 1) + seed
     torch.manual_seed(value)
+    # same seed -> same weights (P14): deterministic kernels (the gather's backward
+    # accumulates in a fixed order); warn only where an op has no deterministic version
+    torch.use_deterministic_algorithms(True, warn_only=True)
     return np.random.default_rng(value)
 
 
@@ -124,7 +127,10 @@ def loss_terms(
         + config.cons_weight * slope
         + config.hi_weight * hi
     )
-    parts = {k: v.item() for k, v in {"mse": mse, "nll": nll, "hinge": hinge, "slope": slope, "hi": hi}.items()}
+    parts = {
+        k: v.item()
+        for k, v in {"mse": mse, "nll": nll, "hinge": hinge, "slope": slope, "hi": hi}.items()
+    }
     if "experts" in out:  # F0 deep supervision
         ex = out["experts"]
         terms = []
@@ -134,7 +140,8 @@ def loss_terms(
                 continue
             mm, sm, nm = ex["mu"][..., m], ex["sigma"][..., m], ex["nu"][..., m]
             terms.append(
-                _weighted((mm - y) ** 2, wm) + nll_w * _weighted(student_t_nll(y, mm.detach(), sm, nm), wm)
+                _weighted((mm - y) ** 2, wm)
+                + nll_w * _weighted(student_t_nll(y, mm.detach(), sm, nm), wm)
             )
         if terms:
             expert = torch.stack(terms).mean()
@@ -292,7 +299,9 @@ def fit(
             g["lr"] = _lr(step, config, phase_a, total)
         if phase == "B" and step == phase_a + 1:
             ema.load_state_dict(model.state_dict())
-        sequences = [augmented(data.units[u], rng, config) for u in train for _ in range(config.copies)]
+        sequences = [
+            augmented(data.units[u], rng, config) for u in train for _ in range(config.copies)
+        ]
         batch = collate(sequences, train_tensors, config, rng=rng, n_channels=n_ch)
         offset = int(rng.integers(2, MAX_PAIR_OFFSET + 1))
         b_step = step - phase_a
@@ -316,7 +325,13 @@ def fit(
         if phase == "B" and b_step % config.eval_every == 0:
             pred = predict(ema, val_seq, unit_tensors[fold.validation], config, n_ch)
             train_pred = [
-                predict(ema, make_sequence(data.units[u], None, config.w_far), unit_tensors[u], config, n_ch)
+                predict(
+                    ema,
+                    make_sequence(data.units[u], None, config.w_far),
+                    unit_tensors[u],
+                    config,
+                    n_ch,
+                )
                 for u in train
             ]
             score = weighted_mae(pred)
@@ -373,7 +388,9 @@ def fit(
     from rulfuse.diagnostics import fit_diagnostics
 
     diag = fit_diagnostics(selected, data, fold, train, config, state, preds, unit_tensors, store)
-    (out / "diagnostics.json").write_text(json.dumps(diag, indent=1, default=float), encoding="utf-8")
+    (out / "diagnostics.json").write_text(
+        json.dumps(diag, indent=1, default=float), encoding="utf-8"
+    )
     selection = {
         "fold_test": fold.test,
         "fold_validation": fold.validation,
@@ -391,10 +408,10 @@ def fit(
     (out / "curves.json").write_text(json.dumps(state.curves), encoding="utf-8")
     ckpt.unlink(missing_ok=True)
     (out / "DONE").write_text("ok", encoding="utf-8")
+    kept = state.evals[state.best_eval]["val_mae_s"] if state.best_eval >= 0 else float("nan")
     log(
         f"[fit] {fold.test} seed {seed}: step {selection['selected_step']} kept, "
-        f"validation MAE {state.evals[state.best_eval]['val_mae_s'] if state.best_eval >= 0 else float('nan'):.1f} s, "
-        f"{elapsed:.0f} s"
+        f"validation MAE {kept:.1f} s, {elapsed:.0f} s"
     )
     return selection
 
@@ -411,7 +428,9 @@ def _coverage(pred: Prediction, level: float) -> float:
     return float(np.mean((s.rul[keep] >= lo) & (s.rul[keep] <= hi)))
 
 
-def write_predictions(path: Path, preds: dict[str, Prediction], roles: dict, data: FoldData) -> None:
+def write_predictions(
+    path: Path, preds: dict[str, Prediction], roles: dict, data: FoldData
+) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -419,8 +438,18 @@ def write_predictions(path: Path, preds: dict[str, Prediction], roles: dict, dat
     cols: dict[str, list] = {
         k: []
         for k in (
-            "unit", "role", "segment", "tau_s", "elapsed_s", "window", "rul_s", "y_s",
-            "mu_s", "sigma_s", "nu", "hi_hat",
+            "unit",
+            "role",
+            "segment",
+            "tau_s",
+            "elapsed_s",
+            "window",
+            "rul_s",
+            "y_s",
+            "mu_s",
+            "sigma_s",
+            "nu",
+            "hi_hat",
         )
     }
     alpha_cols: list[list[float]] = []

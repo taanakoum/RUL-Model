@@ -197,9 +197,7 @@ def attention_mask(batch: dict[str, Tensor], history: int, images: bool) -> tupl
     tau, valid, entry = batch["tau"], batch["valid"], batch["entry"]
     if images:
         t = torch.cat([tau, batch["img_time"]], 1)
-        is_img = torch.cat(
-            [torch.zeros_like(valid), torch.ones_like(batch["img_valid"])], 1
-        )
+        is_img = torch.cat([torch.zeros_like(valid), torch.ones_like(batch["img_valid"])], 1)
         ok = torch.cat([valid, batch["img_valid"]], 1)
         ent = torch.cat([entry, batch["img_entry"] + 1], 1)  # an image belongs to the next one
     else:

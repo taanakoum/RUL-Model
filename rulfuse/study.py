@@ -156,15 +156,30 @@ def run_task(
     fold = folds[row["fold_test"]]
     config = study.config(row["arm"], runs)
     if signal_features is None and config.uses_signal:
-        signal_features = SignalFeatures.open(find_features(store, "signal", study.spec["signal_encoder"]))
+        signal_features = SignalFeatures.open(
+            find_features(store, "signal", study.spec["signal_encoder"])
+        )
     if image_features is None and config.image_kinds:
-        image_features = ImageFeatures.open(find_features(store, "image", study.spec["image_encoder"]))
+        image_features = ImageFeatures.open(
+            find_features(store, "image", study.spec["image_encoder"])
+        )
     data = build_fold_data(store, signal_features, image_features, fold, config)
     out = []
     for seed in (int(s) for s in row["seeds"].split(",")):
         target = fit_dir(study.run_dir(runs), row["arm"], fold, seed)
         out.append(
-            fit(store, signal_features, image_features, fold, seed, config, target, device, log, data=data)
+            fit(
+                store,
+                signal_features,
+                image_features,
+                fold,
+                seed,
+                config,
+                target,
+                device,
+                log,
+                data=data,
+            )
         )
     return out
 
@@ -204,7 +219,14 @@ def ensemble_validation(study_dir: Path, arm: str, fold: Fold, seeds: list[int])
         "mu_s": mean,
         "sd_s": np.sqrt(var),
         "seed_window_mae": [
-            float(np.mean(np.abs(m[first["window"].astype(bool)] - first["rul_s"][first["window"].astype(bool)])))
+            float(
+                np.mean(
+                    np.abs(
+                        m[first["window"].astype(bool)]
+                        - first["rul_s"][first["window"].astype(bool)]
+                    )
+                )
+            )
             for m in mu
         ],
     }
@@ -218,10 +240,14 @@ def score_arm(study: Study, arm: str, store: SegmentStore, runs: Path | None = N
     for fold in study_folds(study, store.unit_names):
         ens = ensemble_validation(study.run_dir(runs), arm, fold, study.seeds)
         if ens is None:
-            rows.append({"arm": arm, "fold_test": fold.test, "validation": fold.validation, "done": False})
+            rows.append(
+                {"arm": arm, "fold_test": fold.test, "validation": fold.validation, "done": False}
+            )
             continue
         keep = ens["window"]
-        failures = np.array([store.units[u]["failure_s"] for u in fold.train if store.units[u]["failure_s"]])
+        failures = np.array(
+            [store.units[u]["failure_s"] for u in fold.train if store.units[u]["failure_s"]]
+        )
         rul = ens["rul_s"][keep]
         warnings = []
         for seed in study.seeds:
@@ -236,7 +262,9 @@ def score_arm(study: Study, arm: str, store: SegmentStore, runs: Path | None = N
                 "done": True,
                 "points": int(keep.sum()),
                 "window_mae_s": float(np.mean(np.abs(ens["mu_s"][keep] - rul))),
-                "b2_window_mae_s": float(np.mean(np.abs(b2(failures, ens["tau_s"][keep], horizon) - rul))),
+                "b2_window_mae_s": float(
+                    np.mean(np.abs(b2(failures, ens["tau_s"][keep], horizon) - rul))
+                ),
                 "b0_window_mae_s": float(np.mean(np.abs(horizon / 2 - rul))),
                 "seed_sd_s": float(np.std(ens["seed_window_mae"])),
                 "warnings": len(warnings),
@@ -246,7 +274,9 @@ def score_arm(study: Study, arm: str, store: SegmentStore, runs: Path | None = N
 
 
 def _per_unit(rows: list[dict], arm: str) -> np.ndarray:
-    mine = sorted((r for r in rows if r["arm"] == arm and r.get("done")), key=lambda r: r["validation"])
+    mine = sorted(
+        (r for r in rows if r["arm"] == arm and r.get("done")), key=lambda r: r["validation"]
+    )
     return np.array([r["window_mae_s"] for r in mine])
 
 
@@ -258,7 +288,12 @@ def decide(study: Study, rows: list[dict], config_of) -> dict:
         missing = sorted({f"{r['arm']}/{r['fold_test']}" for r in rows if not r.get("done")})
         return {"complete": False, "missing": missing, "adopted": {}}
     maes = {a: _per_unit(rows, a) for a in arms}
-    out: dict = {"complete": True, "type": kind, "threshold_s": threshold, "means": {a: float(v.mean()) for a, v in maes.items()}}
+    out: dict = {
+        "complete": True,
+        "type": kind,
+        "threshold_s": threshold,
+        "means": {a: float(v.mean()) for a, v in maes.items()},
+    }
     adopted: dict = {}
     if kind == "lr_then_family":
         families: dict[str, list[str]] = {}
@@ -325,14 +360,24 @@ def aggregate(study: Study, runs: Path | None = None, store: SegmentStore | None
     decision["adopted"] = {**study.inherited(runs), **decision.get("new_adoptions", {})}
     decision["study"] = study.name
     decision["validation_only"] = True
-    (out_dir / "decision.json").write_text(json.dumps(decision, indent=1, default=float), encoding="utf-8")
+    (out_dir / "decision.json").write_text(
+        json.dumps(decision, indent=1, default=float), encoding="utf-8"
+    )
     (out_dir / "REPORT.md").write_text(render_report(study, rows, decision), encoding="utf-8")
     return decision
 
 
 def render_report(study: Study, rows: list[dict], decision: dict) -> str:
-    lines = [f"# Study {study.name}", "", "Validation units only (D15); 3-seed ensembles; window MAE (s).", ""]
-    lines += ["| Arm | Mean window MAE | Mean B2 | Mean B0 | Folds better than B2 | Seed sd (mean) | Warnings |", "|---|---|---|---|---|---|---|"]
+    lines = [
+        f"# Study {study.name}",
+        "",
+        "Validation units only (D15); 3-seed ensembles; window MAE (s).",
+        "",
+    ]
+    lines += [
+        "| Arm | Mean window MAE | Mean B2 | Mean B0 | Folds better than B2 | Seed sd | Warnings |",
+        "|---|---|---|---|---|---|---|",
+    ]
     for arm in study.arms:
         mine = [r for r in rows if r["arm"] == arm and r.get("done")]
         if not mine:
@@ -344,6 +389,17 @@ def render_report(study: Study, rows: list[dict], decision: dict) -> str:
         better = sum(r["window_mae_s"] < r["b2_window_mae_s"] for r in mine)
         sd = np.mean([r["seed_sd_s"] for r in mine])
         warn = sum(r["warnings"] for r in mine)
-        lines.append(f"| {arm} | {m:.1f} | {b2m:.1f} | {b0m:.1f} | {better}/{len(mine)} | {sd:.1f} | {warn} |")
-    lines += ["", "## Decision", "", "```json", json.dumps(decision, indent=1, default=float), "```", ""]
+        lines.append(
+            f"| {arm} | {m:.1f} | {b2m:.1f} | {b0m:.1f} | {better}/{len(mine)} "
+            f"| {sd:.1f} | {warn} |"
+        )
+    lines += [
+        "",
+        "## Decision",
+        "",
+        "```json",
+        json.dumps(decision, indent=1, default=float),
+        "```",
+        "",
+    ]
     return "\n".join(lines)

@@ -32,6 +32,7 @@ set -eo pipefail
 # Keep CPU thread pools inside the cores SLURM granted (Ruche gives 4 GB per core).
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export CUBLAS_WORKSPACE_CONFIG=:4096:8  # deterministic cuBLAS (rulfuse.train.seed_everything)
 
 echo "job $SLURM_JOB_ID ($SLURM_JOB_NAME) on $(hostname), partition $SLURM_JOB_PARTITION, started $(date)"
 echo "commit: $(git log -1 --oneline 2>/dev/null || echo unknown)"

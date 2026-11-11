@@ -169,11 +169,14 @@ def build_fold_data(
         desc_std = scaler.transform(desc_all.reshape(len(ids), -1)).reshape(desc_all.shape)
         desc_std = desc_std.astype(np.float32)
         desc_std[~present] = 0.0
-        channel_dim = emb_all.shape[-1] + desc_std.shape[-1]
+        channel_dim = int(emb_all.shape[-1]) + int(desc_all.shape[-1])
         signal_dim = channel_dim * (2 if config.token_mode == "both" else 1)
         meta_channels = signal_features.meta["signature"]["channels"]
         channels = [(c["sensor"], c["axis"], c["derivation"]) for c in meta_channels]
-        transforms = {"descriptor_mean": scaler.mean.tolist(), "descriptor_scale": scaler.scale.tolist()}
+        transforms = {
+            "descriptor_mean": scaler.mean.tolist(),
+            "descriptor_scale": scaler.scale.tolist(),
+        }
     else:
         n_ch, signal_dim, channels, transforms = 1, 1, [("none", "none", "none")], {}
         emb_all = desc_std = None
@@ -198,7 +201,9 @@ def build_fold_data(
                     unit = str(img["unit"][r])
                     pos = _image_recordings(store, unit, np.array([img["available_s"][r]]))[0]
                     target[i] = hi_all[store.recording_rows(unit)[pos]]
-                out = cross_fitted_readout(vectors, target, img["unit"][rows].astype(str), fold.train)
+                out = cross_fitted_readout(
+                    vectors, target, img["unit"][rows].astype(str), fold.train
+                )
                 readout[rows] = (out - hi_mean) / hi_sd
 
     data: dict[str, UnitData] = {}

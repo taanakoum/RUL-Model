@@ -67,7 +67,7 @@ def wilcoxon_paired(a: np.ndarray, b: np.ndarray, alternative: str = "two-sided"
     if not np.any(d != 0):
         return {"statistic": 0.0, "p": 1.0}
     res = sp_stats.wilcoxon(d, alternative=alternative)
-    return {"statistic": float(res.statistic), "p": float(res.pvalue)}
+    return {"statistic": float(res.statistic), "p": float(res.pvalue)}  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def holm(pvalues: np.ndarray) -> np.ndarray:

@@ -9,7 +9,12 @@ from rulfuse.adapters import toy
 from rulfuse.config import FitConfig
 from rulfuse.core.folds import Fold, leave_one_unit_out
 from rulfuse.core.store import SegmentStore, build_segment_store
-from rulfuse.features.cache import extract_image_features, extract_signal_features
+from rulfuse.features.cache import (
+    ImageFeatures,
+    SignalFeatures,
+    extract_image_features,
+    extract_signal_features,
+)
 from rulfuse.features.encoders import PixelStatsEncoder, ProjectionEncoder
 
 TINY = FitConfig(
@@ -32,8 +37,8 @@ TINY = FitConfig(
 @dataclass
 class Toy:
     store: SegmentStore
-    signal: object
-    image: object
+    signal: SignalFeatures
+    image: ImageFeatures
     folds: list[Fold]
 
 
@@ -41,6 +46,8 @@ def build_toy(root: Path, n_units: int = 5) -> Toy:
     ds = toy.build(root / "images", n_units=n_units)
     store = SegmentStore.open(build_segment_store(ds, root / "store"))
     quiet = lambda *_: None  # noqa: E731
-    signal = extract_signal_features(store, ds.signals, ProjectionEncoder(), root=root / "f", log=quiet)
+    signal = extract_signal_features(
+        store, ds.signals, ProjectionEncoder(), root=root / "f", log=quiet
+    )
     image = extract_image_features(store, PixelStatsEncoder(), root=root / "f", log=quiet)
     return Toy(store, signal, image, leave_one_unit_out(store.unit_names))

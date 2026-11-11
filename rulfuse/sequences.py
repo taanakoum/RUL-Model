@@ -197,7 +197,9 @@ class FoldTensors:
         images = [u.images for u in units]
         p, g = data.image_tokens, data.image_dim
         self.images = torch.from_numpy(
-            np.concatenate(images) if sum(len(i) for i in images) else np.zeros((0, p, g), np.float32)
+            np.concatenate(images)
+            if sum(len(i) for i in images)
+            else np.zeros((0, p, g), np.float32)
         ).to(self.device)
         self.img_kind = torch.from_numpy(
             np.concatenate([u.img_kind for u in units]).astype(np.int64)

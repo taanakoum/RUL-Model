@@ -26,7 +26,22 @@ from rulfuse.features.check import feature_check
 from rulfuse.features.encoders import PixelStatsEncoder, ProjectionEncoder
 
 GENERIC = ("core", "features", "models", "omnifuser_rul")  # rulfuse.models arrives in Stage 4
-GENERIC_FILES = ("audit.py", "baselines.py", "metrics.py")
+GENERIC_FILES = (
+    "audit.py",
+    "baselines.py",
+    "metrics.py",
+    "config.py",
+    "tokens.py",
+    "sequences.py",
+    "train.py",
+    "diagnostics.py",
+    "study.py",
+    "stats.py",
+    "evaluation.py",
+    "uncertainty.py",
+    "degradation.py",
+    "inference.py",
+)
 VOCABULARY = ("nonastreda", "flank", "tool_label", "image_label", "passmeta", "fz_rel", "ttf")
 
 
