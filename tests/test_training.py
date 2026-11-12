@@ -172,3 +172,76 @@ def test_manifest_and_aggregate_on_a_toy_study(toy, tmp_path):
     summary = (tmp_path / "toystudy" / "summary.csv").read_text(encoding="utf-8")
     assert "window_mae_s" in summary
     assert json.loads((tmp_path / "toystudy" / "decision.json").read_text())["study"] == "toystudy"
+
+
+def test_cached_readout_equals_a_fresh_one(toy, tmp_path):
+    from rulfuse.tokens import build_fold_data
+
+    fold = toy.folds[3]
+    first = build_fold_data(toy.store, toy.signal, toy.image, fold, TINY)  # computes, caches
+    assert list((toy.store.root / "readouts").glob("surface-*.npy"))
+    again = build_fold_data(toy.store, toy.signal, toy.image, fold, TINY)  # reads the cache
+    for u in first.units:
+        assert np.array_equal(first.units[u].img_readout, again.units[u].img_readout)
+
+
+def test_per_arm_seeds_reuse_and_parallel_seeds(toy, tmp_path):
+    from rulfuse.study import run_task
+
+    fold = toy.folds[0]
+    base = {
+        "store": "toy/x",
+        "store_root": str(toy.store.root),
+        "features_root": str(toy.signal.folder.parent.parent),
+        "signal_encoder": "projection",
+        "image_encoder": "pixelstats",
+        "base": TINY.to_dict(),
+        "seeds": [0, 1],
+        "folds": [fold.test],
+    }
+    first = Study("first", {**base, "arms": {"a": {}}, "decision": {"type": "none"}})
+    write_manifest(first, toy.store.unit_names, tmp_path)
+    kw = {
+        "log": lambda *_: None,
+        "store": toy.store,
+        "signal_features": toy.signal,
+        "image_features": toy.image,
+    }
+    run_task(first, 0, "cpu", tmp_path, **kw)
+    # B1: an identical arm in a later study is copied, not refit
+    second = Study(
+        "second",
+        {
+            **base,
+            "arms": {"same": {}, "ctl": {"memory": False}},
+            "arm_seeds": {"ctl": [0]},
+            "decision": {"type": "none"},
+        },
+    )
+    lines = write_manifest(second, toy.store.unit_names, tmp_path).read_text().splitlines()
+    assert lines[2].split("\t")[3] == "0"  # B2: the control runs on seed 0 only
+    run_task(second, 0, "cpu", tmp_path, **kw)
+    for seed in (0, 1):
+        copy = tmp_path / "second" / "same" / f"fold-{fold.test}" / f"seed-{seed}"
+        assert (copy / "reused_from.txt").is_file()
+        a = torch.load(copy / "model.pt", weights_only=True)
+        b = torch.load(
+            tmp_path / "first" / "a" / f"fold-{fold.test}" / f"seed-{seed}" / "model.pt",
+            weights_only=True,
+        )
+        assert all(torch.equal(a[k], b[k]) for k in a)
+    # A1: seeds side by side give the same weights as one after another
+    third = Study("third", {**base, "arms": {"p": {"memory": False}}, "decision": {"type": "none"}})
+    write_manifest(third, toy.store.unit_names, tmp_path)
+    run_task(third, 0, "cpu", tmp_path, **kw, parallel=True)
+    run_task(second, 1, "cpu", tmp_path, **kw)  # ctl: memory off, seed 0, sequential
+    a = torch.load(
+        tmp_path / "third" / "p" / f"fold-{fold.test}" / "seed-0" / "model.pt", weights_only=True
+    )
+    b = torch.load(
+        tmp_path / "second" / "ctl" / f"fold-{fold.test}" / "seed-0" / "model.pt", weights_only=True
+    )
+    assert not (
+        tmp_path / "third" / "p" / f"fold-{fold.test}" / "seed-0" / "reused_from.txt"
+    ).exists()
+    assert all(torch.equal(a[k], b[k]) for k in a)

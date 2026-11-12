@@ -1211,3 +1211,50 @@ check passes: `bash slurm/study.sh gate2a`.
 - `status.sh` tolerates caches without `shapes`, shows RUL-Fuse study progress (DONE
   against the manifest), and prints each failing log's node.
 - Runbook §15.4 has a row for this fault.
+
+## Compute plan D26: less compute, same decisions (2026-11-12, during Gate 2a)
+
+You accepted A1–A3 and B1–B5. Gate 2a (array 2505075, nodes ruche-gpu13 and gpu17
+excluded) runs unchanged on the earlier code; the changes apply from Gate 2b.
+
+**Profile of a short real fit (laptop CPU):**
+- Attention and its backward pass take about 70 %, the relative-time bias about 15 %, and
+  batching about 1 %.
+- Token building takes 21 s per task, 93 % of it the cross-fitted photo-readout ridge.
+
+**Engineering (results unchanged; toy F1 and F0 weights identical before and after A2+A3):**
+- **A1:** `run-task --parallel-seeds` runs a task's seeds in separate processes on one GPU.
+  `array.sbatch` now asks for 6 CPUs and gives each seed 2 threads. Seeds side by side give
+  the same weights as one after another (tested).
+- **A2:** each unit caches its per-recording segment and image rows, and batching keeps a
+  CPU copy of the presence mask.
+- **A3:** the readout is cached per fold in `<store>/readouts/`. A cached readout equals a
+  fresh one (tested).
+
+**Fewer runs:**
+- **B1:** a fit identical to a finished one is copied, with `reused_from.txt`. The match
+  needs the same store, configuration key, fold and seed. Tested: the copy equals the
+  original.
+- **B2:** Gate 2b's controls run on seed 0 only (`arm_seeds` in `gate2b.json`).
+- **B3:** the sweep has 4 variants: d 32, rank 8, w_far 0.1, ρ_max 0.3.
+- **B4:** Gate 3 uses the Student-t head only; decision 8 is fixed.
+- **B5:** tier-2 sensitivity is dropped.
+
+**Fits left from now, about 760:**
+
+| Job | Fits |
+|---|---|
+| Gate 2a | 153 |
+| J4 rerun | about 8 |
+| Gate 2b | 150 |
+| Sweep | 120 |
+| Gate 3 | 120 |
+| Final | 0 (copied) |
+| Shapley | 60 |
+| Sensitivity tier 1 | 150 |
+
+That compares with about 1,690 before. Plan D26 and §7.5, §9, §12, §16.4 and §17.3 are
+updated, and so is runbook §15.3.
+
+**On Ruche:** don't `git pull` until `runs/gate2a/decision.json` exists. Then pull and
+submit Gate 2b.

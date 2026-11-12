@@ -1,6 +1,7 @@
 #!/bin/bash
 # One task of a RUL-Fuse study array (PROJECT_PLAN.md §7.11): the seeds of one manifest line
-# (arm x fold), on one GPU. Finished fits are skipped and an interrupted one resumes, so a
+# (arm x fold), side by side on one GPU (A1). A fit identical to one already finished in
+# another study is copied, not rerun (B1). Finished fits are skipped and an interrupted one resumes, so a
 # resubmission completes a study.
 #   sbatch --array=0-N%4 slurm/array.sbatch STUDY        (N + 1 = lines of runs/STUDY/manifest.tsv)
 # Usually submitted by slurm/study.sh, which writes the manifest first.
@@ -10,7 +11,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=6
 #SBATCH --time=04:00:00
 #SBATCH --export=NONE
 #SBATCH --propagate=NONE
@@ -40,5 +41,7 @@ if ! python -c "import torch; torch.zeros(1, device='cuda'); print('GPU ok:', to
     nvidia-smi >&2 || true
     exit 3
 fi
-python -m rulfuse.cli run-task --study "$1" --task "$SLURM_ARRAY_TASK_ID" --device cuda
+# The task's seeds run side by side on the one GPU (A1): the model is small, so one fit leaves
+# the A100 mostly idle. Each fit seeds itself, so the results equal a sequential run.
+python -m rulfuse.cli run-task --study "$1" --task "$SLURM_ARRAY_TASK_ID" --device cuda     --parallel-seeds --threads 2
 echo "finished $(date)"

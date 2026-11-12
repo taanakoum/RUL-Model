@@ -34,7 +34,10 @@ HI are the generic schema (D18).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from functools import cached_property
+from pathlib import Path
 
 import numpy as np
 
@@ -42,11 +45,39 @@ from rulfuse.config import FitConfig
 from rulfuse.core.folds import Fold
 from rulfuse.core.normalization import Scaler
 from rulfuse.core.schema import TIME_TOLERANCE_S
-from rulfuse.core.store import SegmentStore
+from rulfuse.core.store import SegmentStore, stable_hash
 from rulfuse.features.cache import ImageFeatures, SignalFeatures
 from rulfuse.features.probe import cross_fitted_readout
 
 LN_EPS = 1e-5
+READOUT_VERSION = 1
+
+
+def cached_readout(
+    store: SegmentStore, image_features, kind: str, fold: Fold, compute
+) -> np.ndarray:
+    """The cross-fitted HI readout of one image kind for one fold, cached next to the store
+    (A3, 2026-11-12). It depends only on the store, the image cache, the kind and the training
+    units, so every arm and seed of a fold reuses it; the values are saved in float64, so a
+    cached readout equals a fresh one exactly."""
+    key = stable_hash(
+        {
+            "version": READOUT_VERSION,
+            "store": store.signature,
+            "image_cache": Path(image_features.folder).name,
+            "kind": kind,
+            "train": sorted(fold.train),
+        }
+    )
+    path = store.root / "readouts" / f"{kind}-{key}.npy"
+    if path.is_file():
+        return np.load(path)
+    out = np.asarray(compute(), dtype=np.float64)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npy")
+    np.save(tmp, out)
+    os.replace(tmp, path)
+    return out
 
 
 def layer_norm(x: np.ndarray) -> np.ndarray:
@@ -91,6 +122,16 @@ class UnitData:
     img_kind: np.ndarray  # (I,) index into the admitted kinds
     images: np.ndarray  # (I, P, G) float32
     img_readout: np.ndarray  # (I,) standardized HI readout (0 without an HI)
+
+    @cached_property
+    def rec_segments(self) -> list[np.ndarray]:
+        """Per recording position, its signal-token rows (computed once; A2)."""
+        return [np.flatnonzero(self.seg_rec == p) for p in range(len(self.rec_start))]
+
+    @cached_property
+    def rec_images(self) -> list[np.ndarray]:
+        """Per recording position, the image rows that follow it (computed once; A2)."""
+        return [np.flatnonzero(self.img_rec == p) for p in range(len(self.rec_start))]
 
     @property
     def failure_rec(self) -> int:
@@ -201,8 +242,13 @@ def build_fold_data(
                     unit = str(img["unit"][r])
                     pos = _image_recordings(store, unit, np.array([img["available_s"][r]]))[0]
                     target[i] = hi_all[store.recording_rows(unit)[pos]]
-                out = cross_fitted_readout(
-                    vectors, target, img["unit"][rows].astype(str), fold.train
+                groups = img["unit"][rows].astype(str)
+                out = cached_readout(
+                    store,
+                    image_features,
+                    kind,
+                    fold,
+                    lambda v=vectors, t=target, g=groups: cross_fitted_readout(v, t, g, fold.train),
                 )
                 readout[rows] = (out - hi_mean) / hi_sd
 

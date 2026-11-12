@@ -411,7 +411,14 @@ def cmd_run_task(args: argparse.Namespace) -> int:
 
     study = Study.load(args.study)
     for task in args.task:
-        run_task(study, task, _device(args.device), args.runs_root)
+        run_task(
+            study,
+            task,
+            _device(args.device),
+            args.runs_root,
+            parallel=args.parallel_seeds,
+            threads=args.threads,
+        )
     return 0
 
 
@@ -565,6 +572,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--study", required=True)
     p.add_argument("--task", type=int, nargs="+", required=True)
     p.add_argument("--device", default="auto")
+    p.add_argument("--parallel-seeds", action="store_true", help="run the seeds side by side (A1)")
+    p.add_argument("--threads", type=int, default=1, help="CPU threads per seed process")
     p.add_argument("--runs-root", type=Path, default=None)
     p.set_defaults(func=cmd_run_task)
 

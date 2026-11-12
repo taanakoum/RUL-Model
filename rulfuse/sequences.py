@@ -109,7 +109,7 @@ def make_sequence(
             raise ValueError("the failure recording must stay in the plan")
         failure = unit.failure_s - unit.rec_start[f] + starts[k]
     seg_parts, entry_parts, tau_parts = [], [], []
-    by_rec = [np.flatnonzero(unit.seg_rec == p) for p in range(len(unit.rec_start))]
+    by_rec = unit.rec_segments
     for k, p in enumerate(order):
         rows = by_rec[p]
         seg_parts.append(rows)
@@ -136,15 +136,14 @@ def make_sequence(
         hi_prev[k] = value if np.isfinite(value) else 0.0
     oracle = hi_prev[entry] if len(entry) else np.zeros(0)
     # images move with their recording
-    img_rows, img_time, img_entry = [], [], []
     ends = starts + duration[order] if len(order) else np.zeros(0)
-    for k, p in enumerate(order):
-        for i in np.flatnonzero(unit.img_rec == p):
-            img_rows.append(i)
-            img_time.append(ends[k] + unit.img_offset[i])
-            img_entry.append(k)
-    img = np.array(img_rows, dtype=np.int64)
-    img_time_a = np.array(img_time, dtype=float)
+    parts = [(k, unit.rec_images[p]) for k, p in enumerate(order) if len(unit.rec_images[p])]
+    img = np.concatenate([rows for _, rows in parts]) if parts else np.zeros(0, np.int64)
+    img_entry = (
+        np.concatenate([np.full(len(rows), k) for k, rows in parts]) if parts else np.zeros(0)
+    ).astype(np.int64)
+    img_time_a = (ends[img_entry] + unit.img_offset[img]) if len(img) else np.zeros(0)
+    img = img.astype(np.int64)
     keep = np.argsort(img_time_a, kind="stable")
     seq = Sequence(
         unit=unit.name,
@@ -162,7 +161,7 @@ def make_sequence(
         oracle=oracle,
         img=img[keep],
         img_time=img_time_a[keep],
-        img_entry=np.array(img_entry, dtype=np.int64)[keep],
+        img_entry=img_entry[keep],
         failure_s=failure,
     )
     return seq
@@ -191,9 +190,8 @@ class FoldTensors:
             zip(self.names, np.cumsum([0] + [len(u.images) for u in units])[:-1], strict=True)
         )
         self.signal = torch.from_numpy(np.concatenate([u.signal for u in units])).to(self.device)
-        self.present = torch.from_numpy(np.concatenate([u.seg_present for u in units])).to(
-            self.device
-        )
+        self.present_np = np.concatenate([u.seg_present for u in units])
+        self.present = torch.from_numpy(self.present_np).to(self.device)
         images = [u.images for u in units]
         p, g = data.image_tokens, data.image_dim
         self.images = torch.from_numpy(
@@ -250,7 +248,7 @@ def collate(
         "img_time": _pad([s.img_time for s in sequences], 0.0, np.float32),
         "img_entry": _pad([s.img_entry for s in sequences], 0, np.int64),
     }
-    present = tensors.present.cpu().numpy()[batch["seg"]] & batch["valid"]
+    present = tensors.present_np[batch["seg"]] & batch["valid"]  # no GPU round trip (A2)
     drop_signal = np.zeros(b, bool)
     drop_images = np.zeros(b, bool)
     channel_keep = np.ones((b, n_channels), bool)

@@ -74,6 +74,11 @@ class Study:
     def arms(self) -> dict[str, dict]:
         return dict(self.spec["arms"])
 
+    def arm_seeds(self, arm: str) -> list[int]:
+        """The arm's seeds: ``arm_seeds`` in the spec (B2, reported controls on one seed),
+        otherwise the study's seeds."""
+        return list(self.spec.get("arm_seeds", {}).get(arm, self.seeds))
+
     def run_dir(self, runs: Path | None = None) -> Path:
         return (runs or paths.runs_dir()) / self.name
 
@@ -99,6 +104,10 @@ def study_folds(study: Study, units: list[str]) -> list[Fold]:
 
 
 def open_store(spec: dict) -> SegmentStore:
+    """The study's store: ``store_root`` if the spec gives one, else
+    interim/segments/<dataset>/<signature>."""
+    if spec.get("store_root"):
+        return SegmentStore.open(Path(spec["store_root"]))
     dataset, signature = spec["store"].split("/")
     return SegmentStore.open(paths.interim_dir() / "segments" / dataset / signature)
 
@@ -123,7 +132,7 @@ def write_manifest(study: Study, units: list[str], runs: Path | None = None) -> 
         task = 0
         for arm in study.arms:
             for fold in folds:
-                w.writerow([task, arm, fold.test, ",".join(map(str, study.seeds))])
+                w.writerow([task, arm, fold.test, ",".join(map(str, study.arm_seeds(arm)))])
                 task += 1
     (out / "study.json").write_text(json.dumps(study.spec, indent=1), encoding="utf-8")
     return path
@@ -132,6 +141,51 @@ def write_manifest(study: Study, units: list[str], runs: Path | None = None) -> 
 def read_manifest(path: Path) -> list[dict]:
     with Path(path).open(encoding="utf-8") as f:
         return list(csv.DictReader(f, delimiter="\t"))
+
+
+def find_identical_fit(
+    runs: Path, store_name: str, config_key: str, fold: Fold, seed: int, target: Path
+) -> Path | None:
+    """A finished fit of any study with the same store, configuration, fold and seed (B1):
+    fits are deterministic, so it is the fit this task would make."""
+    for selection in sorted(runs.glob(f"*/*/fold-{fold.test}/seed-{seed}/selection.json")):
+        folder = selection.parent
+        if folder.resolve() == target.resolve() or not (folder / "DONE").is_file():
+            continue
+        if (folder / "reused_from.txt").is_file():
+            continue  # copy from originals only
+        spec_path = folder.parents[2] / "study.json"
+        if not spec_path.is_file():
+            continue
+        if json.loads(spec_path.read_text(encoding="utf-8")).get("store") != store_name:
+            continue
+        info = json.loads(selection.read_text(encoding="utf-8"))
+        same_roles = info.get("fold_validation") == fold.validation
+        if info.get("config_key") == config_key and same_roles and info.get("seed") == seed:
+            return folder
+    return None
+
+
+def reuse_fit(source: Path, target: Path) -> dict:
+    import shutil
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".copying")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    shutil.copytree(source, tmp)
+    (tmp / "reused_from.txt").write_text(str(source), encoding="utf-8")
+    if target.exists():
+        shutil.rmtree(target)
+    tmp.rename(target)
+    return json.loads((target / "selection.json").read_text(encoding="utf-8"))
+
+
+def _seed_worker(name: str, spec: dict, task: int, seed: int, device: str, runs, threads: int):
+    import torch
+
+    torch.set_num_threads(threads)
+    run_task(Study(name, spec), task, device, runs, seeds=[seed])
 
 
 def run_task(
@@ -143,8 +197,19 @@ def run_task(
     store: SegmentStore | None = None,
     signal_features=None,
     image_features=None,
+    seeds: list[int] | None = None,
+    parallel: bool = False,
+    threads: int = 1,
 ) -> list[dict]:
-    """Run every seed of one manifest line (skipping finished fits)."""
+    """Run every seed of one manifest line.
+
+    * Finished fits are skipped; an interrupted one resumes.
+    * A fit identical to a finished one elsewhere (same store, configuration, fold and
+      seed) is copied, not rerun (B1).
+    * With ``parallel``, the pending seeds run side by side in separate processes on the
+      same device (A1). The tokens are prepared once first, so the processes read the
+      cached readouts. Results are the same as one after another: every fit seeds itself.
+    """
     from rulfuse.features.cache import ImageFeatures, SignalFeatures, find_features
     from rulfuse.tokens import build_fold_data
     from rulfuse.train import fit
@@ -155,18 +220,59 @@ def run_task(
     folds = {f.test: f for f in leave_one_unit_out(store.unit_names)}
     fold = folds[row["fold_test"]]
     config = study.config(row["arm"], runs)
+    features_root = Path(study.spec["features_root"]) if study.spec.get("features_root") else None
     if signal_features is None and config.uses_signal:
         signal_features = SignalFeatures.open(
-            find_features(store, "signal", study.spec["signal_encoder"])
+            find_features(store, "signal", study.spec["signal_encoder"], features_root)
         )
     if image_features is None and config.image_kinds:
         image_features = ImageFeatures.open(
-            find_features(store, "image", study.spec["image_encoder"])
+            find_features(store, "image", study.spec["image_encoder"], features_root)
         )
-    data = build_fold_data(store, signal_features, image_features, fold, config)
-    out = []
-    for seed in (int(s) for s in row["seeds"].split(",")):
+    from rulfuse.train import fit_key
+
+    runs_root = runs or paths.runs_dir()
+    wanted = [int(s) for s in row["seeds"].split(",")]
+    if seeds is not None:
+        wanted = [s for s in wanted if s in seeds]
+    pending = []
+    key = fit_key(config)
+    for seed in wanted:
         target = fit_dir(study.run_dir(runs), row["arm"], fold, seed)
+        if (target / "DONE").is_file():
+            continue
+        source = find_identical_fit(runs_root, study.spec["store"], key, fold, seed, target)
+        if source is not None:
+            log(f"[task {task}] seed {seed}: identical fit found, copied from {source}")
+            reuse_fit(source, target)
+            continue
+        pending.append(seed)
+    data = build_fold_data(store, signal_features, image_features, fold, config)
+    if parallel and len(pending) > 1:
+        import multiprocessing as mp
+
+        ctx = mp.get_context("spawn")
+        procs = [
+            ctx.Process(
+                target=_seed_worker,
+                args=(study.name, study.spec, task, s, device, runs, threads),
+            )
+            for s in pending
+        ]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join()
+        failed = [s for s, p in zip(pending, procs, strict=True) if p.exitcode != 0]
+        if failed:
+            raise RuntimeError(f"task {task}: seeds {failed} failed (see the log above)")
+        pending = []
+    out = []
+    for seed in wanted:
+        target = fit_dir(study.run_dir(runs), row["arm"], fold, seed)
+        if seed not in pending:
+            out.append(json.loads((target / "selection.json").read_text(encoding="utf-8")))
+            continue
         out.append(
             fit(
                 store,
@@ -238,7 +344,7 @@ def score_arm(study: Study, arm: str, store: SegmentStore, runs: Path | None = N
     horizon = store.settings.horizon_s
     rows = []
     for fold in study_folds(study, store.unit_names):
-        ens = ensemble_validation(study.run_dir(runs), arm, fold, study.seeds)
+        ens = ensemble_validation(study.run_dir(runs), arm, fold, study.arm_seeds(arm))
         if ens is None:
             rows.append(
                 {"arm": arm, "fold_test": fold.test, "validation": fold.validation, "done": False}
@@ -250,7 +356,7 @@ def score_arm(study: Study, arm: str, store: SegmentStore, runs: Path | None = N
         )
         rul = ens["rul_s"][keep]
         warnings = []
-        for seed in study.seeds:
+        for seed in study.arm_seeds(arm):
             diag = fit_dir(study.run_dir(runs), arm, fold, seed) / "diagnostics.json"
             if diag.is_file():
                 warnings += json.loads(diag.read_text(encoding="utf-8"))["warnings"]

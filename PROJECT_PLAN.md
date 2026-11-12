@@ -73,6 +73,7 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D23 | Inference modes | **Two modes for every model's predictions** (`rulfuse.inference`): **current**, each prediction as the model makes it (the primary result); **context**, where the unit's earlier predictions, aged by the operating time since, are blended with the new one (time constant 120 s and cap margin H/15, fixed in advance). Both are reported side by side with a paired comparison and a decision rule fixed in advance (§10.3). B6 reports both now; RUL-Fuse's evaluation uses the same function | You (2026-11-07): a mode where previous segments guide the new prediction, and a way to compare the two |
 | D24 | Photo types on Nonastreda | **Force + tool photos.** The Stage-3 feature check (report `nonastreda-3e357b5a23ff.json`, 2026-11-11) found all three photo types informative and excluded all three for leaking the stage label. Workpiece (10 of 10 tools on PC1, PC2 and the readout) and chip (readout 7 of 10, PC1 6 of 10) stay excluded. **Tool is readmitted**: only its PC2 crossed the limit (4 of 10, limit 3); its readout scores 3 of 10, the same as the true wear (`hi_reference` 3 of 10); its probe beats the mean (MAE 21.7 vs 35.8) and its shuffled control collapses. Recorded in `configs/feature_check_overrides.json`, read by `rulfuse.features.check.admitted_image_types` (B6's submit guard, RUL-Fuse). The headline model, B6 and the modality study use force and tool; the workpiece report stays the leakage demonstration | You (2026-11-11), before any RUL result |
 | D25 | Lessons from B6 for RUL-Fuse | **Diagnostics and controls only; no design value changes.** B6's full run (2026-11-11) over-fitted: its median training MSE fell 52× while its median validation MAE stayed between 359 and 409 s; 6 of 30 fits peaked in the first 2 epochs; the epoch-to-epoch validation noise (median per-fit sd 37 s) was larger than the gain over training; some tools stayed at the cap. Only these training and validation facts are used, never B6's test scores (D15 stands; D20's "no RUL-Fuse decision reads B6" is relaxed for these diagnostics at your request). RUL-Fuse's plan already carries the remedies (frozen encoders, about 0.15 M trainable parameters, phase A, trajectory augmentation, EMA, smoothed selection, patience). Added: (1) every evaluation also scores the training units, and a validation/training MAE ratio above 3 warns (generalization gap); (2) the selection noise (sd of successive validation differences) is reported per fit; (3) cap saturation on the validation unit (μ within H/15 of the cap while RUL < H/2) warns above 50 %; (4) a validation MAE above the constant B0 warns, besides B2; (5) Stage 5's exit also reports the winner against B0 and B4 on validation | You (2026-11-11): "from the results derived from this experiment continue implementing stage 4 and 5 and make amendments where needed" |
+| D26 | Compute plan for Stages 5-8 | **Less compute, same decisions** (accepted 2026-11-12, during Gate 2a). Engineering changes that leave results unchanged (verified: identical weights before and after): **A1** a task's seeds run side by side on one GPU (`run-task --parallel-seeds`); **A2** per-recording index lists cached per unit and no GPU round trip when batching; **A3** the cross-fitted photo readout cached per fold next to the store (`<store>/readouts/`). Fewer runs: **B1** a fit identical to a finished one (same store, configuration, fold and seed) is copied, not rerun: Gate 2b's default is Gate 2a's winner, the sweep's default is Gate 2b's result when that arm exists, and Gate 3's outer fits and the final runs reuse the Gate-2 design's fits; **B2** Gate 2b's reported controls (last recording, no memory, no hinge) run on seed 0 only; **B3** the sweep keeps 4 variants with a reason: d 32 and rank 8 (B6 over-fitted), w_far 0.1 (cap saturation), ρ_max 0.3 (usage shortcut); **B4** Gate 3 compares the calibration methods (a)-(c) on the Student-t head only (the quantile head is dropped; decision 8 is fixed); **B5** tier-2 sensitivity is dropped. Gate 2a runs unchanged; the new code applies from Gate 2b. About 760 fits remain instead of about 1,690 | You (2026-11-12) |
 
 ---
 
@@ -1052,9 +1053,9 @@ Cost: about 0.05-0.3 s per step on a CPU, so a fit takes 1-3 min; the pilot
 | Defaults | Fixed in Appendix A before any run | – |
 | Gate 2a | Learning rate {3e-4, 1e-3, 3e-3} for each of F1 and F0 (Rule B within a family); then F1 against F0 at their best (Rule B) | 2 × 3 × 10 folds × 3 seeds = 180 |
 | Gate 2b | Options on the winner, no trajectory augmentation and no phase A (each by Rule A); token mode relative only or absolute only against the default both (peers, Rule B) | 4 × 30 = 120 |
-| Gate 2b control | Last recording only (reported, not a decision: your specification is the full history) | 30 |
-| Gate 2b control | Without the memory (D21) and without the monotonic hinge (D22), each reported, not a decision: both are your specification | 2 × 30 = 60 |
-| Sweep | One factor at a time on the winner, each by Rule A: d {32, 96}; dropout {0.1, 0.3}; projection rank {8, 32}; ρ_max {0.1, 0.3}; w_far {0.1, 1.0} | 10 × 30 = 300 |
+| Gate 2b control | Last recording only (reported, not a decision: your specification is the full history); seed 0 only (D26 B2) | 10 |
+| Gate 2b control | Without the memory (D21) and without the monotonic hinge (D22), each reported, not a decision: both are your specification; seed 0 only (D26 B2) | 2 × 10 = 20 |
+| Sweep | One factor at a time on the winner, each by Rule A: d 32; projection rank 8; ρ_max 0.3; w_far 0.1 (reduced from 10 variants by D26 B3: the ones with a reason from B6's run) | 4 × 30 = 120 |
 
 There is no per-fold tuning: one validation tool per fold is too noisy to
 tune on (OmniFuser F4).
@@ -1208,8 +1209,8 @@ Every table shows these, in seconds.
    - It is fully causal, and smooths the flicker that true RUL never shows
      (slope −1).
    - Predictions at the cap are passed through unfiltered.
-4. **Gate 3** compares the head (Student-t, quantile) × the calibration
-   method (a, b, c) by the validation Winkler score. The constraint is
+4. **Gate 3** compares the calibration methods (a, b, c) on the Student-t head
+   by the validation Winkler score (the quantile head was dropped by D26 B4). The constraint is
    validation coverage within [0.85, 0.95]. The filter is then
    tested by Rule A.
 
@@ -1356,7 +1357,7 @@ Each arm reruns the frozen design, 10 folds × 3 seeds, after the freeze.
 | 2 | Trimming | OmniFuser's non-causal 5 %-of-pass reference |
 | 2 | Segment length | 5 s, 20 s (new Mantis extraction, Ruche job J2) |
 
-Tier 1 must run. Tier 2 runs in the order listed, as time allows.
+Tier 1 must run. Tier 2 is dropped (D26 B5, 2026-11-12).
 
 ---
 
@@ -1648,12 +1649,12 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J4 | 4 | The seven sanity checks (`rulfuse sanity`, `slurm/stage4.sh`) | 1 | about 8 | 1-2 GPU-h |
 | J1 | 4 | Pilot: one fold, F1 on the cached features (`slurm/study.sh pilot`) | 1 | 3 | 30 min |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds | 60 | 180 | 4-5 GPU-h |
-| J6 | 5 | Gate 2b: the default + 4 options + 3 controls (last recording; no memory; no hinge) × 10 folds | 80 | 240 | 6-7 GPU-h |
-| J7 | 5 | Sweep: the default + 10 variants × 10 folds | 110 | 330 | 8-9 GPU-h |
-| J8 | 6 | Gate 3: 2 heads × 10 folds, each with 4 inner fits per seed | 20 | 300 | 7-8 GPU-h |
-| J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each | 10 | 150 | 3.5 GPU-h |
-| J11 | 8 | Shapley: 7 coalitions × 10 folds (15 if the workpiece passes) | 70 (150) | 210 (450) | 5 (11) GPU-h |
-| J12 | 8 | Sensitivity tier 1 (5 refit arms) / tier 2 (up to 9 arms + features) | 50 / 90 | 150 / 270 | 4 / 8 GPU-h |
+| J6 | 5 | Gate 2b: the default (copied from Gate 2a, D26 B1) + 4 options × 3 seeds + 3 controls × seed 0 (B2), × 10 folds | 80 | 150 run + 30 copied | 3-4 GPU-h |
+| J7 | 5 | Sweep: the default (copied when Gate 2b has that arm) + 4 variants (B3) × 10 folds | 50 | 120 run (+30 if the default is new) | 3 GPU-h |
+| J8 | 6 | Gate 3: the Student-t head only (B4): the Gate-2 design's fits (copied) + 4 inner fits per seed × 10 folds | 10 | 120 run + 30 copied | 3 GPU-h |
+| J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each: the same fits as Gate 3 if Gate 3 changes nothing trained (it decides calibration and the filter only), so copied (B1) | 10 | 0-150 | 0-3.5 GPU-h |
+| J11 | 8 | Shapley: with force and tool only (D24), 3 coalitions × 10 folds; the full coalition is the final model (copied) | 30 | 60 run + 30 copied | 1.5 GPU-h |
+| J12 | 8 | Sensitivity tier 1 (5 refit arms); tier 2 dropped (D26 B5) | 50 | 150 | 4 GPU-h |
 | J13 | 9 | Report | 1 | – | 15 min |
 | B6 | after J3 | B6 OmniFuser-RUL, the full run: caches, then 10 folds × 3 seeds (`b6-train`, `slurm/omnifuser_rul.sh`) | 1 | 30 | 2.5-7.5 GPU-h |
 | B6-R | after B6, and from 2026-12-01 | B6's report (`b6-report`, `slurm/omnifuser_results.sh`; test results from the freeze or with `--unseal`) | 1 | – | 5 min |
@@ -1906,7 +1907,7 @@ Each decision is appended to `PROJECT_LOG.md` with its numbers.
 | 6 | Token mode (relative, absolute, both) | 2b | B (peers, after the Stage-2 evidence) |
 | 7 | Sweep adoptions (each factor, including the projection rank) | Sweep | A |
 | – | (Control) last pass only | 2b | Reported, not decided |
-| 8 | Head (Student-t or quantile) | 3 | B |
+| 8 | Head: Student-t (fixed by D26 B4; the quantile head is not run) | – | – |
 | 9 | Calibration method (a, b, c) | 3 | B |
 | 10 | Causal RUL filter | 3 | A |
 

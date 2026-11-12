@@ -748,8 +748,29 @@ submission.
 | Job | Command | Arms × folds | Tasks | Fits (3 seeds) | Study file |
 |---|---|---|---|---|---|
 | J5 Gate 2a | `bash slurm/study.sh gate2a` | 6 × 10 | 60 | 180 | `gate2a.json` |
-| J6 Gate 2b | `bash slurm/study.sh gate2b` | 8 × 10 | 80 | 240 | `gate2b.json` |
-| J7 Sweep | `bash slurm/study.sh sweep` | 11 × 10 | 110 | 330 | `sweep.json` |
+| J6 Gate 2b | `bash slurm/study.sh gate2b` | 8 × 10 | 80 | 150 run + 30 copied | `gate2b.json` |
+| J7 Sweep | `bash slurm/study.sh sweep` | 5 × 10 | 50 | 120 run + 30 copied (or run) | `sweep.json` |
+
+**Less compute, same decisions (D26, 2026-11-12).** From Gate 2b on:
+
+- **A1:** a task's seeds run side by side on its GPU (`--parallel-seeds`, 6 CPUs, 2 threads
+  per seed).
+- **A2, A3:** batching and the per-fold photo readout are cached. The readout goes in
+  `<store>/readouts/`.
+- **B1:** a fit identical to one already finished (same store, configuration, fold and seed)
+  is **copied** with a `reused_from.txt`, not rerun. The log says
+  `identical fit found, copied from …`. Gate 2b's `default` is Gate 2a's winner, so its 30
+  fits are copies. The sweep's `default` is a copy when Gate 2b has that exact arm.
+- **B2:** Gate 2b's 3 controls run on seed 0 only.
+- **B3:** the sweep keeps 4 variants.
+
+These changes leave the results unchanged: the same seed gives the same weights, checked
+before and after on the laptop.
+
+**Gate 2a was submitted with the earlier code. Do not `git pull` while its array or
+aggregation is pending or running:** every task reads the checkout when it starts, and one
+study must not mix code versions. Pull once `runs/gate2a/decision.json` exists, then submit
+Gate 2b.
 
 - **Gate 2a**: learning rate of each family (F1 and F0, rates 3e-4, 1e-3, 3e-3), then F1
   against F0 at their best rates.
@@ -757,18 +778,21 @@ submission.
   win against the arm without them; the token modes (`default`, `tokens-relative`,
   `tokens-absolute`) are peers; 3 of the 8 arms are **reported controls**
   (`control-last-recording`, `control-no-memory`, `control-no-hinge`) and decide nothing.
-- **Sweep** (inherits both): one factor at a time against the default (`d32`, `d96`,
-  `dropout0.1`, `dropout0.3`, `rank8`, `rank32`, `rho0.1`, `rho0.3`, `wfar0.1`, `wfar1.0`).
+- **Sweep** (inherits both): one factor at a time against the default. There are 4
+  variants (B3): `d32` and `rank8` (capacity: B6 over-fitted), `wfar0.1` (cap saturation)
+  and `rho0.3` (the usage shortcut).
 
 `slurm/study.sh STUDY` does three things in order:
 
 1. `python -m rulfuse.cli manifest --study STUDY` writes
    `$RULFUSE_DATA_ROOT/runs/STUDY/manifest.tsv`, one line per arm × fold. It **refuses to
    start** when an inherited study has no `decision.json` yet.
-2. It submits the array (`slurm/array.sbatch`, one A100 per task, 4 CPUs, **4 h limit per
-   task**, at most **4 tasks at once** by `%4`). Task N runs
-   `python -m rulfuse.cli run-task --study STUDY --task N --device cuda`, which trains the
-   3 seeds of that arm and fold.
+2. It submits the array: `slurm/array.sbatch`, one A100 per task, 6 CPUs, **4 h limit per
+   task**, at most **4 tasks at once** (`%4`). Known bad GPU nodes are excluded
+   (`slurm/bad_nodes.txt`). Task N runs
+   `python -m rulfuse.cli run-task --study STUDY --task N --device cuda --parallel-seeds`.
+   It first copies any identical finished fit (B1), then trains the remaining seeds of that
+   arm and fold side by side (A1).
 3. It submits the aggregation on `cpu_short`, which starts only when the whole array
    succeeded.
 
@@ -785,7 +809,8 @@ line. `bash slurm/status.sh` shows the array; array logs are
 
 The aggregation log prints each arm's mean validation window MAE and `adopted: …`.
 
-**Time limits.** A task is 3 fits and has 4 h, so a fit must take under about 80 minutes.
+**Time limits.** A task is 3 fits and has 4 h. With the seeds side by side (A1, from Gate
+2b) a fit may take up to about 3 h; one after another (Gate 2a), under about 80 minutes.
 Check the pilot's `seconds` (§15.2) before J5. If it is longer, stop and ask before
 submitting: the limit is changed in `slurm/array.sbatch`, never by shrinking a study.
 
@@ -923,7 +948,7 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 | Sanity checks alone, some of them | `sbatch --job-name=J4-sanity --partition=gpua100 --time=06:00:00 slurm/job.sbatch python -m rulfuse.cli sanity --device cuda --checks 1 2` |
 | Time per fit (sets J5-J7 limits) | `grep '"seconds"' "$RULFUSE_DATA_ROOT"/runs/pilot/F1-default/fold-T1/seed-*/selection.json` |
 | Gate 2a (J5), then read `runs/gate2a/REPORT.md` | `bash slurm/study.sh gate2a` |
-| Gate 2b (J6), after Gate 2a's decision | `bash slurm/study.sh gate2b` |
+| Gate 2b (J6), after Gate 2a's decision | `git pull` (only now: Gate 2a ran the earlier code), then `bash slurm/study.sh gate2b` |
 | Sweep (J7), after Gate 2b's decision | `bash slurm/study.sh sweep` |
 | Finish an interrupted study | the same `bash slurm/study.sh STUDY` (skips `DONE` fits, resumes the rest) |
 | Aggregate a study alone | `sbatch slurm/cpu.sbatch python -m rulfuse.cli aggregate --study STUDY` |
