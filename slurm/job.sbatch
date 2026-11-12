@@ -43,6 +43,7 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader ||
 # with that node excluded (docs/RUCHE_RUNBOOK.md §15.4).
 if ! python -c "import torch; torch.zeros(1, device='cuda'); print('GPU ok:', torch.cuda.get_device_name(0))"; then
     echo "BAD GPU NODE: $(hostname) (CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset})" >&2
+    echo "$(hostname)  # $(date +%F) job ${SLURM_JOB_ID:-?}" >> "$RULFUSE_DATA_ROOT/bad_gpu_nodes.txt"
     nvidia-smi >&2 || true
     exit 3
 fi

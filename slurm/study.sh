@@ -14,17 +14,19 @@ set -euo pipefail
 study="${1:?usage: bash slurm/study.sh STUDY [SBATCH OPTIONS...]}"
 shift
 opts=("$@")
+exclude=$(bash slurm/exclude.sh)  # known bad GPU nodes (slurm/bad_nodes.txt)
 cd "$(dirname "$0")/.."
 mkdir -p runs/logs
 : "${RULFUSE_DATA_ROOT:?source slurm/env.sh first}"
 python -m rulfuse.cli manifest --study "$study"
 n=$(( $(wc -l < "$RULFUSE_DATA_ROOT/runs/$study/manifest.tsv") - 1 ))
-array=$(sbatch --parsable --array=0-$((n - 1))%4 --job-name="$study" ${opts[@]+"${opts[@]}"} \
+array=$(sbatch --parsable --array=0-$((n - 1))%4 --job-name="$study" ${exclude:+"$exclude"} ${opts[@]+"${opts[@]}"} \
     slurm/array.sbatch "$study")
 array=${array%%;*}
 agg=$(sbatch --parsable --dependency=afterok:"$array" --job-name="$study-aggregate" \
     slurm/cpu.sbatch python -m rulfuse.cli aggregate --study "$study")
 agg=${agg%%;*}
 echo "$study: array $array ($n tasks), aggregation $agg (waits for the array)"
+echo "Excluded nodes: ${exclude:-none}"
 echo "Result: \$RULFUSE_DATA_ROOT/runs/$study/REPORT.md and decision.json"
 echo "Follow with: bash slurm/status.sh    Cancel: scancel $array $agg"

@@ -1,0 +1,6 @@
+# GPU nodes never to run on (read by slurm/exclude.sh, used by study.sh and stage4.sh).
+# One node per line; text after "#" is ignored. Nodes found later by the GPU probe in
+# array.sbatch / job.sbatch are appended to $RULFUSE_DATA_ROOT/bad_gpu_nodes.txt instead
+# (on Ruche, so git pull never conflicts); both lists are excluded.
+ruche-gpu17  # 2026-11-12: gate2a 49 tasks + J4 failed, "CUDA-capable device(s) is/are busy or unavailable"
+ruche-gpu13  # 2026-11-12: gate2a tasks 33, 58, 59 failed the same way

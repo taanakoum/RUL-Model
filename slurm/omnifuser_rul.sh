@@ -67,7 +67,8 @@ print(f"photo types {players} admitted by {os.path.basename(reports[-1])}{note}"
 PY
 fi
 
-train=$(sbatch --parsable --job-name=b6-train --time=16:00:00 slurm/job.sbatch \
+exclude=$(bash slurm/exclude.sh)  # known bad GPU nodes (slurm/bad_nodes.txt)
+train=$(sbatch --parsable --job-name=b6-train --time=16:00:00 ${exclude:+"$exclude"} slurm/job.sbatch \
     python -m rulfuse.cli omnifuser-arm --players "${players[@]}" --feature-device cuda \
     ${extra[@]+"${extra[@]}"})
 train=${train%%;*}
