@@ -7,7 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p runs/logs
 : "${RULFUSE_DATA_ROOT:?source slurm/env.sh first}"
-j4=$(sbatch --parsable --job-name=J4-sanity --time=06:00:00 slurm/job.sbatch \
+# Options given to this script go to both jobs, e.g. --exclude=NODE.
+j4=$(sbatch --parsable --job-name=J4-sanity --time=06:00:00 "$@" slurm/job.sbatch \
     python -m rulfuse.cli sanity --device cuda)
 echo "J4 sanity checks ${j4%%;*}"
-bash slurm/study.sh pilot
+bash slurm/study.sh pilot "$@"

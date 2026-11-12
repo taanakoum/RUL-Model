@@ -32,14 +32,25 @@ for meta in sorted(glob.glob(os.path.join(root, "interim", "segments", "*", "*",
 for meta in sorted(glob.glob(os.path.join(root, "interim", "features", "*", "*", "meta.json"))):
     with open(meta, encoding="utf-8") as f:
         m = json.load(f)
-    shape = next(iter(m["shapes"].values()))
+    shapes = m.get("shapes")  # B6's own caches have no "shapes"
     done = m.get("n_done", 0)
-    state = "complete" if m.get("complete") else f"{done}/{shape[0]}"
+    total = next(iter(shapes.values()))[0] if shapes else "?"
+    state = "complete" if m.get("complete") or not shapes else f"{done}/{total}"
     print(f"  cache {os.path.basename(os.path.dirname(meta))}: {state}")
 for report in sorted(glob.glob(os.path.join(root, "runs", "feature-check", "*.json"))):
     with open(report, encoding="utf-8") as f:
         r = json.load(f)
     print(f"  feature check {os.path.basename(report)}: {json.dumps(r.get('decisions'))}")
+
+# RUL-Fuse studies: fits done (DONE files) against the manifest
+for manifest in sorted(glob.glob(os.path.join(root, "runs", "*", "manifest.tsv"))):
+    study = os.path.dirname(manifest)
+    with open(manifest, encoding="utf-8") as f:
+        lines = [line for line in f.read().splitlines()[1:] if line.strip()]
+    expected = sum(len(line.split("\t")[3].split(",")) for line in lines)
+    done = len(glob.glob(os.path.join(study, "*", "fold-*", "seed-*", "DONE")))
+    extra = "  decision.json present" if os.path.isfile(os.path.join(study, "decision.json")) else ""
+    print(f"  RUL-Fuse study {os.path.basename(study)}: {done}/{expected} fits{extra}")
 
 # B6 OmniFuser-RUL: fits done per arm (fold x seed folders with a fit.json)
 for study in sorted(glob.glob(os.path.join(root, "runs", "omnifuser_rul", "*-*"))):
@@ -75,7 +86,8 @@ for log in runs/logs/*.out; do
     [ -f "$log" ] || continue
     last=$(grep -E "Traceback|Error:|error:|FAILED|CANCELLED|oom-kill" "$log" | grep -v "DUE TO TIME LIMIT" | tail -n 1)
     if [ -n "$last" ]; then
-        echo "  $log: $(echo "$last" | cut -c1-110)"
+        node=$(grep -m1 -oE " on [A-Za-z0-9_-]+" "$log" | cut -c5-)
+        echo "  $log [${node:-?}]: $(echo "$last" | cut -c1-100)"
         found=1
     fi
     if grep -q "DUE TO TIME LIMIT" "$log"; then echo "  $log: stopped at its time limit (resubmit to resume)"; fi

@@ -31,5 +31,13 @@ export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export CUBLAS_WORKSPACE_CONFIG=:4096:8  # deterministic cuBLAS (rulfuse.train.seed_everything)
 echo "job ${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID} ($SLURM_JOB_NAME) on $(hostname), started $(date)"
 echo "commit: $(git log -1 --oneline 2>/dev/null || echo unknown)"
+# Fail fast, naming the node, if its GPU cannot be used (a GPU in exclusive mode still held
+# by another process gives "CUDA-capable device(s) is/are busy or unavailable"). Resubmit
+# with that node excluded (docs/RUCHE_RUNBOOK.md §15.4).
+if ! python -c "import torch; torch.zeros(1, device='cuda'); print('GPU ok:', torch.cuda.get_device_name(0))"; then
+    echo "BAD GPU NODE: $(hostname) (CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset})" >&2
+    nvidia-smi >&2 || true
+    exit 3
+fi
 python -m rulfuse.cli run-task --study "$1" --task "$SLURM_ARRAY_TASK_ID" --device cuda
 echo "finished $(date)"

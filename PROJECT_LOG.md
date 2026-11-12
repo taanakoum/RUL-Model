@@ -1193,3 +1193,21 @@ scores).** No design value changes. The added diagnostics:
 **Next on Ruche:** `git pull`, then `bash slurm/stage4.sh` (J4 and the pilot J1). If every
 check passes: `bash slurm/study.sh gate2a`.
 
+
+## Gate 2a first submission: GPU node faults (2026-11-12)
+
+- Array 2496537: most tasks failed at their first CUDA call with "CUDA-capable device(s)
+  is/are busy or unavailable". J4 (2494670) failed the same way.
+- Tasks 1-3, 24-26, 36, 52 and 53 did not fail. The same code ran B6's 30 fits on
+  2026-11-11. So it is a node fault: a GPU in exclusive mode still held by another process.
+- The aggregation 2496538 waits forever (`DependencyNeverSatisfied`) and must be cancelled.
+- `status.sh` also crashed on B6's caches, which have no `shapes` field.
+
+**Changes:**
+- `slurm/array.sbatch` and `slurm/job.sbatch` probe the GPU before running. On failure they
+  print `BAD GPU NODE: <node>` and exit with code 3.
+- `slurm/study.sh` and `slurm/stage4.sh` pass extra sbatch options through, for example
+  `--exclude=NODE`.
+- `status.sh` tolerates caches without `shapes`, shows RUL-Fuse study progress (DONE
+  against the manifest), and prints each failing log's node.
+- Runbook §15.4 has a row for this fault.
