@@ -17,8 +17,8 @@ An arm's config is the defaults, then the inherited adoptions, then ``base``, th
 1. ``rulfuse manifest --study S`` writes ``runs/S/manifest.tsv`` (one task per arm × fold;
    the seeds run inside a task).
 2. ``slurm/array.sbatch`` runs ``rulfuse run-task`` per line; finished fits are skipped.
-3. ``rulfuse aggregate --study S`` builds the 3-seed ensembles on the **validation** units,
-   scores the window MAE per fold and applies the study's rule. It writes ``summary.csv``,
+3. ``rulfuse aggregate --study S`` builds the seed ensembles on the **validation** units, scores
+   the window MAE per fold and applies the study's rule. It writes ``summary.csv``,
    ``decision.json`` and ``REPORT.md``.
 
 **Test seal (D15).** The aggregation reads prediction rows with role ``validation`` only;
@@ -302,7 +302,7 @@ def read_validation_rows(path: Path) -> dict[str, np.ndarray]:
 
 
 def ensemble_validation(study_dir: Path, arm: str, fold: Fold, seeds: list[int]) -> dict | None:
-    """3-seed ensemble of the validation unit: mixture mean (and moments), per point."""
+    """Seed ensemble of the validation unit: mixture mean (and moments), per point."""
     from rulfuse.uncertainty import mixture_moments
 
     parts = []
@@ -477,7 +477,7 @@ def render_report(study: Study, rows: list[dict], decision: dict) -> str:
     lines = [
         f"# Study {study.name}",
         "",
-        "Validation units only (D15); 3-seed ensembles; window MAE (s).",
+        f"Validation units only (D15); {len(study.seeds)}-seed ensembles; window MAE (s).",
         "",
     ]
     lines += [

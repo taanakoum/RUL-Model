@@ -1,12 +1,27 @@
 {
- "description": "Pilot J1 (PROJECT_PLAN.md §16.4, Stage 4): one fold, F1 at the defaults, 3 seeds, on the real caches; times a fit. Not a decision.",
+ "description": "Pilot J1 (PROJECT_PLAN.md §16.4, Stage 4): one fold, F1 at the defaults, 3 seeds side by side (--parallel-seeds), on the real caches; times a task to measure the D26 A1 speed-up. Not a decision.",
  "store": "nonastreda/3e357b5a23ff",
  "signal_encoder": "mantis8m",
  "image_encoder": "dinov2b",
- "base": {"players": ["signal", "tool"]},
+ "base": {
+  "players": [
+   "signal",
+   "tool"
+  ]
+ },
  "inherits": [],
- "seeds": [0, 1, 2],
- "arms": {"F1-default": {}},
- "folds": ["T1"],
- "decision": {"type": "none"}
+ "seeds": [
+  0,
+  1,
+  2
+ ],
+ "arms": {
+  "F1-default": {}
+ },
+ "folds": [
+  "T1"
+ ],
+ "decision": {
+  "type": "none"
+ }
 }

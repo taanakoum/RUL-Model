@@ -74,6 +74,7 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D24 | Photo types on Nonastreda | **Force + tool photos.** The Stage-3 feature check (report `nonastreda-3e357b5a23ff.json`, 2026-11-11) found all three photo types informative and excluded all three for leaking the stage label. Workpiece (10 of 10 tools on PC1, PC2 and the readout) and chip (readout 7 of 10, PC1 6 of 10) stay excluded. **Tool is readmitted**: only its PC2 crossed the limit (4 of 10, limit 3); its readout scores 3 of 10, the same as the true wear (`hi_reference` 3 of 10); its probe beats the mean (MAE 21.7 vs 35.8) and its shuffled control collapses. Recorded in `configs/feature_check_overrides.json`, read by `rulfuse.features.check.admitted_image_types` (B6's submit guard, RUL-Fuse). The headline model, B6 and the modality study use force and tool; the workpiece report stays the leakage demonstration | You (2026-11-11), before any RUL result |
 | D25 | Lessons from B6 for RUL-Fuse | **Diagnostics and controls only; no design value changes.** B6's full run (2026-11-11) over-fitted: its median training MSE fell 52× while its median validation MAE stayed between 359 and 409 s; 6 of 30 fits peaked in the first 2 epochs; the epoch-to-epoch validation noise (median per-fit sd 37 s) was larger than the gain over training; some tools stayed at the cap. Only these training and validation facts are used, never B6's test scores (D15 stands; D20's "no RUL-Fuse decision reads B6" is relaxed for these diagnostics at your request). RUL-Fuse's plan already carries the remedies (frozen encoders, about 0.15 M trainable parameters, phase A, trajectory augmentation, EMA, smoothed selection, patience). Added: (1) every evaluation also scores the training units, and a validation/training MAE ratio above 3 warns (generalization gap); (2) the selection noise (sd of successive validation differences) is reported per fit; (3) cap saturation on the validation unit (μ within H/15 of the cap while RUL < H/2) warns above 50 %; (4) a validation MAE above the constant B0 warns, besides B2; (5) Stage 5's exit also reports the winner against B0 and B4 on validation | You (2026-11-11): "from the results derived from this experiment continue implementing stage 4 and 5 and make amendments where needed" |
 | D26 | Compute plan for Stages 5-8 | **Less compute, same decisions** (accepted 2026-11-12, during Gate 2a). Engineering changes that leave results unchanged (verified: identical weights before and after): **A1** a task's seeds run side by side on one GPU (`run-task --parallel-seeds`); **A2** per-recording index lists cached per unit and no GPU round trip when batching; **A3** the cross-fitted photo readout cached per fold next to the store (`<store>/readouts/`). Fewer runs: **B1** a fit identical to a finished one (same store, configuration, fold and seed) is copied, not rerun: Gate 2b's default is Gate 2a's winner, the sweep's default is Gate 2b's result when that arm exists, and Gate 3's outer fits and the final runs reuse the Gate-2 design's fits; **B2** Gate 2b's reported controls (last recording, no memory, no hinge) run on seed 0 only; **B3** the sweep keeps 4 variants with a reason: d 32 and rank 8 (B6 over-fitted), w_far 0.1 (cap saturation), ρ_max 0.3 (usage shortcut); **B4** Gate 3 compares the calibration methods (a)-(c) on the Student-t head only (the quantile head is dropped; decision 8 is fixed); **B5** tier-2 sensitivity is dropped. Gate 2a runs unchanged; the new code applies from Gate 2b. About 760 fits remain instead of about 1,690 | You (2026-11-12) |
+| D27 | Seeds after Gate 2a: 3 kept, one-seed fallback | (2026-11-13) A one-seed proposal was made and reversed the same day. Gate 2a measured about 50 min per fit and about 2.5 h per 3-fit task (seeds one after another, before D26), about 150 GPU-h in all. Every later study keeps 3 seeds, relying on D26 A1 (seeds side by side on one GPU) to cut the time per task. **Check on Gate 2b's first trained 3-seed tasks** (not the copied default, not the seed-0 controls): if such a task takes more than 2 h, the sweep and every later study switch to seed 0 only (the 3-seed estimate would then exceed the time left before the Dec 1 freeze). **Gate 3 note:** a task with 4 inner fits per seed would take about 4 × the time of one fit even with seeds side by side, over the 4 h limit; Stage 6 must split those tasks or raise the limit | You (2026-11-13) |
 
 ---
 
@@ -1638,7 +1639,7 @@ Project 14's Ruche runbooks). In short:
 
 ### 16.4 Job plan
 
-Estimates assume about 1.5 min per fit; the pilot measures the real cost.
+GPU-h are estimates: 1.5 h per 3-seed task and 0.85 h per 1-seed task, assuming D26 A1 (seeds side by side) gives about 1.7× throughput; they are replaced by Gate 2b's measured task time (D27). Gate 2a measured about 50 min per fit (a task of 3 sequential fits took about 2.5 h; 4 tasks at a time), so the earlier GPU-h figures in J5 (4-5) were too low: J5 measured about 150 GPU-h.
 
 | Job | Stage | Content | Tasks | Fits | Estimate |
 |---|---|---|---|---|---|
@@ -1647,19 +1648,19 @@ Estimates assume about 1.5 min per fit; the pilot measures the real cost.
 | J2 | 3 | Feature caches (`gpua100`): Mantis-8M signals, DINOv2-B photos, scale and determinism checks | 1 | – | 10-30 min |
 | J3 | 3 | Feature check (`cpu_short`): go/no-go, readouts, leakage probe | 1 | – | 2-10 min |
 | J4 | 4 | The seven sanity checks (`rulfuse sanity`, `slurm/stage4.sh`) | 1 | about 8 | 1-2 GPU-h |
-| J1 | 4 | Pilot: one fold, F1 on the cached features (`slurm/study.sh pilot`) | 1 | 3 | 30 min |
+| J1 | 4 | Pilot: one fold, F1 on the cached features (`slurm/study.sh pilot`) | 1 | 3 (side by side) | about 1.5 h |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds | 60 | 180 | 4-5 GPU-h |
-| J6 | 5 | Gate 2b: the default (copied from Gate 2a, D26 B1) + 4 options × 3 seeds + 3 controls × seed 0 (B2), × 10 folds | 80 | 150 run + 30 copied | 3-4 GPU-h |
-| J7 | 5 | Sweep: the default (copied when Gate 2b has that arm) + 4 variants (B3) × 10 folds | 50 | 120 run (+30 if the default is new) | 3 GPU-h |
-| J8 | 6 | Gate 3: the Student-t head only (B4): the Gate-2 design's fits (copied) + 4 inner fits per seed × 10 folds | 10 | 120 run + 30 copied | 3 GPU-h |
-| J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each: the same fits as Gate 3 if Gate 3 changes nothing trained (it decides calibration and the filter only), so copied (B1) | 10 | 0-150 | 0-3.5 GPU-h |
-| J11 | 8 | Shapley: with force and tool only (D24), 3 coalitions × 10 folds; the full coalition is the final model (copied) | 30 | 60 run + 30 copied | 1.5 GPU-h |
-| J12 | 8 | Sensitivity tier 1 (5 refit arms); tier 2 dropped (D26 B5) | 50 | 150 | 4 GPU-h |
+| J6 | 5 | Gate 2b: the default (copied from Gate 2a, D26 B1) + 4 options × 3 seeds + 3 controls × seed 0 (B2), × 10 folds | 80 | 150 run + 30 copied | ~85 GPU-h (est.) |
+| J7 | 5 | Sweep: the default (copied when Gate 2b has that arm) + 4 variants (B3) × 10 folds | 50 | 120 run (+30 if the default is new) | ~60 GPU-h (est.) |
+| J8 | 6 | Gate 3: the Student-t head only (B4): the Gate-2 design's fits (copied) + 4 inner fits per seed × 10 folds | 10 | 120 run + 30 copied | ~60 GPU-h (est.; tasks to be split, D27) |
+| J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each: the same fits as Gate 3 if Gate 3 changes nothing trained (it decides calibration and the filter only), so copied (B1) | 10 | 0-150 | 0-15 GPU-h (est.) |
+| J11 | 8 | Shapley: with force and tool only (D24), 3 coalitions × 10 folds; the full coalition is the final model (copied) | 30 | 60 run + 30 copied | ~30 GPU-h (est.) |
+| J12 | 8 | Sensitivity tier 1 (5 refit arms); tier 2 dropped (D26 B5) | 50 | 150 | ~75 GPU-h (est.) |
 | J13 | 9 | Report | 1 | – | 15 min |
 | B6 | after J3 | B6 OmniFuser-RUL, the full run: caches, then 10 folds × 3 seeds (`b6-train`, `slurm/omnifuser_rul.sh`) | 1 | 30 | 2.5-7.5 GPU-h |
 | B6-R | after B6, and from 2026-12-01 | B6's report (`b6-report`, `slurm/omnifuser_results.sh`; test results from the freeze or with `--unseal`) | 1 | – | 5 min |
 
-The total is about 40-50 A100-hours for RUL-Fuse (the Stage-3 feature job adds under one), plus 2.5-7.5 for baseline B6's single run. Submit arrays in the evening; run
+The total after Gate 2a is about 310 A100-hours, about 3.2 days of wall-clock at 4 tasks at once (estimate; Gate 2a itself took about 150; the Stage-3 feature job adds under one), plus 2.5-7.5 for baseline B6's single run. Submit arrays in the evening; run
 `status.sh` each morning.
 
 ### 16.5 Safe practice

@@ -1258,3 +1258,34 @@ updated, and so is runbook §15.3.
 
 **On Ruche:** don't `git pull` until `runs/gate2a/decision.json` exists. Then pull and
 submit Gate 2b.
+
+## D27: one-seed proposal reversed; 3 seeds kept (2026-11-13, during Gate 2a)
+
+**Decision (you):** a proposal to train one seed (seed 0) per arm after Gate 2a was made and
+reversed the same day. Every study keeps 3 seeds and the D26 plan stands. Code and configs
+are as before (`gate2b.json`, `sweep.json`, `pilot.json` with seeds 0, 1, 2; Gate 2b's
+controls on seed 0 by `arm_seeds`, D26 B2).
+
+**Observed Gate 2a speed (2026-11-13):** a task of 3 sequential fits takes about 2.5 h, so a
+fit takes about 50 min; 4 tasks run at a time. The run needs about 150 GPU-h in all, so the
+plan's 4-5 GPU-h for J5 was far too low. At today's date 31 of 60 tasks remain, about 19 h of
+wall-clock.
+
+**Fallback rule:** D26 A1 (seeds side by side on one GPU) must cut the time per task. Check
+Gate 2b's first trained 3-seed tasks (not the copied default, not the seed-0 controls). If
+such a task takes more than 2 h, the sweep and every later study switch to seed 0 only: the
+3-seed estimate would then exceed the time left before the Dec 1 freeze. The 30 s seed-sd
+warning (§7.8) is a diagnostic and Rule A's 10 s is a decision threshold; they are different
+things.
+
+**Gate 3 note:** a task with 4 inner fits per seed takes about 4 x the time of one fit even
+with seeds side by side, over the 4 h limit. Stage 6 must split those tasks or raise the
+limit.
+
+**Estimates (3 seeds):** J6 about 85 GPU-h, J7 60, J8 60, J10 0-15, J11 30, J12 75: about
+310 GPU-h, about 3.2 days of wall-clock at 4 tasks at once. They assume A1 gives about 1.7x
+throughput and are replaced by Gate 2b's measured task time.
+
+**Docs updated:** plan D27 row and §16.4 (J1, J6-J12, GPU-h note and total); runbook §15.1
+(J7 corrected to 4 variants and 50 tasks; J8, J10-J12 corrected) and §15.3 (time limits and a
+check of the A1 speed-up).

@@ -1,5 +1,5 @@
 {
- "description": "Sweep (PROJECT_PLAN.md \u00a77.5, decision 7), reduced to 4 variants (B3, D26): capacity (d 32, rank 8; B6 over-fitted), cap saturation (w_far 0.1) and the usage shortcut (rho_max 0.3), each adopted only by Rule A against the default. The default equals Gate 2b's result and is copied when an identical fit exists (B1). Job J7.",
+ "description": "Sweep (PROJECT_PLAN.md §7.5, decision 7), reduced to 4 variants (B3, D26): capacity (d 32, rank 8; B6 over-fitted), cap saturation (w_far 0.1) and the usage shortcut (rho_max 0.3), each adopted only by Rule A against the default. The default equals Gate 2b's result and is copied when an identical fit exists (B1). Job J7.",
  "store": "nonastreda/3e357b5a23ff",
  "signal_encoder": "mantis8m",
  "image_encoder": "dinov2b",

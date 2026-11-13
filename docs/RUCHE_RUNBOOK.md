@@ -485,11 +485,11 @@ reference.
 | J1 | 4 | Pilot: one fold, F1 on the cached features; measures the cost of a fit | `gpua100` |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds (60 tasks; §15.3) | `gpua100` |
 | J6 | 5 | Gate 2b: the default + 4 options + 3 controls × 10 folds (80 tasks; §15.3) | `gpua100` |
-| J7 | 5 | Sweep: the default + 10 variants × 10 folds (110 tasks; §15.3) | `gpua100` |
-| J8 | 6 | Gate 3: 2 heads × 10 folds, 4 inner fits per seed | `gpua100` |
+| J7 | 5 | Sweep: the default + 4 variants × 10 folds (50 tasks; §15.3) | `gpua100` |
+| J8 | 6 | Gate 3: Student-t head × 10 folds, 4 inner fits per seed | `gpua100` |
 | J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each | `gpua100` |
-| J11 | 8 | Shapley: 7 coalitions × 10 folds | `gpua100` |
-| J12 | 8 | Sensitivity tiers 1 and 2 | `gpua100` |
+| J11 | 8 | Shapley: 3 coalitions × 10 folds | `gpua100` |
+| J12 | 8 | Sensitivity tier 1 (tier 2 dropped, D26 B5) | `gpua100` |
 | J13 | 9 | Report | `cpu_short` |
 | `b6-train` | after J3 | Baseline B6, the full run: its caches, then 10 folds × 3 seeds (§12.1) | `gpua100` |
 | `b6-report` | after `b6-train` | B6's report and archive (§12.2) | `cpu_short` |
@@ -697,7 +697,7 @@ It submits two jobs that run at the same time:
 | Job | Partition | Content | Expected time |
 |---|---|---|---|
 | J4 sanity | `gpua100`, 6 h limit | `rulfuse sanity --device cuda`: the seven checks below, on fold 1 (the toy data for check 5). Writes `$RULFUSE_DATA_ROOT/runs/sanity/report.json` | up to a few hours |
-| J1 pilot | `gpua100`, 4 h limit | `bash slurm/study.sh pilot`: an array of one task (fold T1, F1 at the defaults, 3 seeds) and then an aggregation job | not known yet: this run measures the time of a fit |
+| J1 pilot | `gpua100`, 4 h limit | `bash slurm/study.sh pilot`: an array of one task (fold T1, F1 at the defaults, 3 seeds side by side) and then an aggregation job | about 1.5 h expected; this run measures the time of a fit |
 
 Each check reads only training and validation tools (D15). The pass rules are fixed:
 
@@ -809,10 +809,22 @@ line. `bash slurm/status.sh` shows the array; array logs are
 
 The aggregation log prints each arm's mean validation window MAE and `adopted: …`.
 
-**Time limits.** A task is 3 fits and has 4 h. With the seeds side by side (A1, from Gate
-2b) a fit may take up to about 3 h; one after another (Gate 2a), under about 80 minutes.
-Check the pilot's `seconds` (§15.2) before J5. If it is longer, stop and ask before
-submitting: the limit is changed in `slurm/array.sbatch`, never by shrinking a study.
+**Time limits.** A task is 3 fits and has 4 h. Gate 2a runs the seeds one after another:
+measured, a fit takes about 50 min and a task about 2.5 h. From Gate 2b the seeds run side by
+side (A1): a task is expected to take about 1.5 h, to be measured (next step). If a task is
+much longer, stop and ask before submitting: the limit is changed in `slurm/array.sbatch`,
+never by shrinking a study.
+
+**Check the A1 speed-up (after submitting Gate 2b).** Once 4 trained tasks have finished (not
+the copied default, not the seed-0 controls), run:
+
+```bash
+for f in runs/gate2b/{no-trajectory-aug,no-phase-a,tokens-relative,tokens-absolute}/fold-*/seed-*/selection.json; do [ -f "$f" ] && python -c "import json,sys;print(sys.argv[1], round(json.load(open(sys.argv[1]))['seconds']/60,1),'min')" "$f"; done
+sacct -j <gate2b array job id> --format=JobID,Elapsed,State,NodeList
+```
+
+If a trained task's `Elapsed` exceeds 2:00:00, tell Claude: the sweep and every later study
+then switch to seed 0 only (D27 fallback).
 
 **Resuming.** If tasks hit the time limit or a node fails, run the same command again:
 
