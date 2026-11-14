@@ -1,5 +1,5 @@
 {
- "description": "Gate 2b (PROJECT_PLAN.md §7.5, decisions 4-6): trajectory augmentation and phase A each keep their place only by Rule A against the arm without them; token modes are peers (Rule B); last-recording, no-memory and no-hinge are reported controls on one seed (B2, D26). The default arm equals Gate 2a's winner and is copied from it, not rerun (B1). Job J6.",
+ "description": "Gate 2b (PROJECT_PLAN.md §7.5, decisions 4-6): trajectory augmentation and phase A each keep their place only by Rule A against the arm without them; token modes are peers (Rule B). The reported controls (last recording, no memory, no hinge) were dropped (D28). The default arm equals Gate 2a's winner (F0, lr 3e-3) and is copied from it, not rerun (B1). Job J6.",
  "store": "nonastreda/3e357b5a23ff",
  "signal_encoder": "mantis8m",
  "image_encoder": "dinov2b",
@@ -30,15 +30,6 @@
   },
   "tokens-absolute": {
    "token_mode": "absolute"
-  },
-  "control-last-recording": {
-   "history_recordings": 1
-  },
-  "control-no-memory": {
-   "memory": false
-  },
-  "control-no-hinge": {
-   "mono_weight": 0.0
   }
  },
  "decision": {
@@ -60,22 +51,6 @@
    "tokens-relative",
    "tokens-absolute"
   ],
-  "peer_field": "token_mode",
-  "controls": [
-   "control-last-recording",
-   "control-no-memory",
-   "control-no-hinge"
-  ]
- },
- "arm_seeds": {
-  "control-last-recording": [
-   0
-  ],
-  "control-no-memory": [
-   0
-  ],
-  "control-no-hinge": [
-   0
-  ]
+  "peer_field": "token_mode"
  }
 }

@@ -1289,3 +1289,66 @@ throughput and are replaced by Gate 2b's measured task time.
 **Docs updated:** plan D27 row and §16.4 (J1, J6-J12, GPU-h note and total); runbook §15.1
 (J7 corrected to 4 variants and 50 tasks; J8, J10-J12 corrected) and §15.3 (time limits and a
 check of the A1 speed-up).
+
+## 2026-11-14 — Gate 2a results and D28
+
+**Decision (you, 2026-11-14, after reviewing Gate 2a):**
+
+1. The gate rule stays as planned: the per-tool mean of the validation window MAE. **Gate 2a
+   adopts F0 with learning rate 3e-3 (338.8 s).**
+2. The sweep (J7, decision 7) is dropped.
+3. Gate 2b's 3 reported controls (last recording only, no memory, no hinge) are dropped
+   entirely. The report will not include those ablations. D26 B2 is moot.
+
+**Gate 2a: validation window MAE (s):**
+
+| Arm | Per-tool mean | Pooled over points | Without T4 | Median | On T4 |
+|---|---|---|---|---|---|
+| F0 lr 3e-4 | 374.5 | 285 | 277.2 | 295 | 1250 |
+| F0 lr 1e-3 | 371.7 | 294 | 287.0 | 321 | 1134 |
+| F0 lr 3e-3 | 338.8 | 304 | 300.0 | 324 | 688 |
+| F1 lr 3e-3 | 383.8 | 312 | 298.4 | 297.5 | 1153 |
+
+Pooled weights are the window points of each validation tool: T2 116, T3 156, T4 20, T5 156,
+T6 154, T7 155, T8 154, T9 148, T10 147, T1 155. A fold named Tk scores validation tool
+T(k+1) (T10 scores T1).
+
+**Caveat to disclose.** Both the family and the learning-rate choice depend on one
+validation tool, T4 (fold T3). T4 has 20 window points because 14 of its last 16 passes were
+never recorded. You chose lr 3e-3 knowingly: it costs about 23 s on the other 9 tools and
+buys robustness when recordings are missing (T4). **The final report must give the per-tool
+mean, the pooled-point MAE and the result without T4.**
+
+**Other findings:**
+- F0 loses to B2 on validation tools T2, T6 and T8. These tools are predictable from usage.
+  Hypothesis: the gPoE under-weights the usage expert.
+- The seed sd of the winner is 35.6 s, so 3 seeds are justified.
+- Warnings for F0 lr 3e-3: memorization 2, above B2 9, above B0 4. There is no
+  generalization gap and no cap saturation.
+
+**Why the sweep is dropped.** Gate 2a removed its reasons: no over-fitting, so no d 32 or
+rank 8; no cap saturation, so no w_far 0.1; ρ_max 0.3 would likely hurt T2, T6 and T8. Gate 3
+inherits Gate 2a and Gate 2b only. Decision 7 is "not run (D28)".
+
+**Gate 2b now:** 5 arms (default, no-trajectory-aug, no-phase-a, tokens-relative,
+tokens-absolute), no controls, no `arm_seeds`. `configs/studies/gate2b.json` is changed,
+`configs/studies/sweep.json` is deleted, and the `slurm/study.sh` comment is updated.
+
+**New counts:**
+- J6 Gate 2b: 50 tasks, 120 fits trained + 30 copied, about 60 GPU-h (est.), about 15 h at
+  4 tasks at once.
+- J7: removed.
+- Remaining fits after Gate 2a: J6 120, J8 120, J10 0-150, J11 60, J12 150, about 450 in
+  all (est. ~240 GPU-h).
+
+**Aggregation bug fixed earlier today.** Rule B's `tied` set was a Python set, so
+`json.dumps` failed when the decision was written. Fixed with `_json_value` in
+`rulfuse/study.py`; a test was added in `tests/test_training.py::test_gate_decisions`. The
+aggregation was rerun as job 2591420.
+
+**Docs updated:** plan D28 row, §7.5, §16.4, §17.3 and the Stage 5 text (§17.2); runbook
+§15 (J6 rows, the sweep removed, the cancel instruction for a Gate 2b submitted before D28).
+
+**On Ruche:** if Gate 2b was submitted before D28 (80 tasks), cancel the controls with
+`scancel <array job id>_[50-79]`, then once tasks 0-49 finish run `git pull` and submit the
+aggregation by hand (runbook §15.3).

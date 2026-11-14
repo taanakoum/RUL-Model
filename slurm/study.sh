@@ -5,10 +5,10 @@
 #   2. submits the array (slurm/array.sbatch), at most 4 tasks at once;
 #   3. submits the aggregation (cpu_short), which waits for the whole array (afterok).
 # Usage, from the repository, after `source slurm/env.sh`:
-#   bash slurm/study.sh pilot | gate2a | gate2b | sweep  [SBATCH OPTIONS...]
+#   bash slurm/study.sh pilot | gate2a | gate2b  [SBATCH OPTIONS...]
 # Options after the study go to the array, e.g. --exclude=NODE1,NODE2 to avoid bad GPU
 # nodes. Resubmitting a study skips finished fits and resumes interrupted ones.
-# Gates run one after the other: gate2b inherits gate2a's decision and the sweep both, so
+# Gates run one after the other: gate2b inherits gate2a's decision (the sweep was dropped, D28), so
 # submit the next one only after reading the previous REPORT.md.
 set -euo pipefail
 study="${1:?usage: bash slurm/study.sh STUDY [SBATCH OPTIONS...]}"

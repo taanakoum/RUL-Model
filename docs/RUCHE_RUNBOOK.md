@@ -484,8 +484,8 @@ reference.
 |---|---|---|---|
 | J1 | 4 | Pilot: one fold, F1 on the cached features; measures the cost of a fit | `gpua100` |
 | J5 | 5 | Gate 2a: 2 families × 3 learning rates × 10 folds (60 tasks; §15.3) | `gpua100` |
-| J6 | 5 | Gate 2b: the default + 4 options + 3 controls × 10 folds (80 tasks; §15.3) | `gpua100` |
-| J7 | 5 | Sweep: the default + 4 variants × 10 folds (50 tasks; §15.3) | `gpua100` |
+| J6 | 5 | Gate 2b: the default + 4 options × 10 folds (50 tasks; §15.3) | `gpua100` |
+| J7 | 5 | Sweep: dropped (D28) | – |
 | J8 | 6 | Gate 3: Student-t head × 10 folds, 4 inner fits per seed | `gpua100` |
 | J10 | 7 | Final: 10 folds × 3 seeds + 4 inner fits each | `gpua100` |
 | J11 | 8 | Shapley: 3 coalitions × 10 folds | `gpua100` |
@@ -669,8 +669,8 @@ whatever finished (§13). Write the log entry.
 ## 15. Stage 4 and Stage 5: RUL-Fuse training on Ruche
 
 Stage 4 checks that the RUL-Fuse training code behaves (seven sanity checks) and times one
-fit (the pilot). Stage 5 runs the three decision studies that choose the model's design:
-Gate 2a, Gate 2b and the sweep. All of them read the Stage 3 feature caches and train on
+fit (the pilot). Stage 5 runs the two decision studies that choose the model's design:
+Gate 2a and Gate 2b (the sweep was dropped, D28). Both read the Stage 3 feature caches and train on
 one A100 per task.
 
 ### 15.1 Before you start
@@ -727,7 +727,7 @@ has few points (logged as an amendment in `PROJECT_LOG.md`).
 grep '"seconds"' "$RULFUSE_DATA_ROOT"/runs/pilot/F1-default/fold-T1/seed-*/selection.json
 ```
 
-  Write the three values in `PROJECT_LOG.md`. They set the time limits of J5-J7 (§15.3).
+  Write the three values in `PROJECT_LOG.md`. They set the time limits of J5-J6 (§15.3).
 - **If any check prints `FAIL`, do not start Stage 5.** Copy `runs/sanity/report.json` home
   (§15.5) and send it, with the log, before anything else is submitted.
 
@@ -739,7 +739,7 @@ sbatch --job-name=J4-sanity --partition=gpua100 --time=06:00:00 slurm/job.sbatch
     python -m rulfuse.cli sanity --device cuda --checks 1 2
 ```
 
-### 15.3 Stage 5: three studies, one after another
+### 15.3 Stage 5: two studies, one after another
 
 Each study inherits the decision of the previous one (`inherits` in its file under
 `configs/studies/`), so they cannot be submitted together. Read each report before the next
@@ -748,10 +748,11 @@ submission.
 | Job | Command | Arms × folds | Tasks | Fits (3 seeds) | Study file |
 |---|---|---|---|---|---|
 | J5 Gate 2a | `bash slurm/study.sh gate2a` | 6 × 10 | 60 | 180 | `gate2a.json` |
-| J6 Gate 2b | `bash slurm/study.sh gate2b` | 8 × 10 | 80 | 150 run + 30 copied | `gate2b.json` |
-| J7 Sweep | `bash slurm/study.sh sweep` | 5 × 10 | 50 | 120 run + 30 copied (or run) | `sweep.json` |
+| J6 Gate 2b | `bash slurm/study.sh gate2b` | 5 × 10 | 50 | 120 run + 30 copied | `gate2b.json` |
 
-**Less compute, same decisions (D26, 2026-11-12).** From Gate 2b on:
+The sweep (J7) was dropped (D28): Gate 2a removed its reasons. Gate 3 follows Gate 2b.
+
+**Less compute, same decisions (D26, 2026-11-12; D28, 2026-11-14).** From Gate 2b on:
 
 - **A1:** a task's seeds run side by side on its GPU (`--parallel-seeds`, 6 CPUs, 2 threads
   per seed).
@@ -760,9 +761,8 @@ submission.
 - **B1:** a fit identical to one already finished (same store, configuration, fold and seed)
   is **copied** with a `reused_from.txt`, not rerun. The log says
   `identical fit found, copied from …`. Gate 2b's `default` is Gate 2a's winner, so its 30
-  fits are copies. The sweep's `default` is a copy when Gate 2b has that exact arm.
-- **B2:** Gate 2b's 3 controls run on seed 0 only.
-- **B3:** the sweep keeps 4 variants.
+  fits are copies.
+- **B2, B3:** moot (D28): Gate 2b has no controls and there is no sweep.
 
 These changes leave the results unchanged: the same seed gives the same weights, checked
 before and after on the laptop.
@@ -776,11 +776,19 @@ Gate 2b.
   against F0 at their best rates.
 - **Gate 2b** (inherits Gate 2a): trajectory augmentation and phase A each stay only if they
   win against the arm without them; the token modes (`default`, `tokens-relative`,
-  `tokens-absolute`) are peers; 3 of the 8 arms are **reported controls**
-  (`control-last-recording`, `control-no-memory`, `control-no-hinge`) and decide nothing.
-- **Sweep** (inherits both): one factor at a time against the default. There are 4
-  variants (B3): `d32` and `rank8` (capacity: B6 over-fitted), `wfar0.1` (cap saturation)
-  and `rho0.3` (the usage shortcut).
+  `tokens-absolute`) are peers. It has 5 arms and no controls (D28).
+- **Sweep:** not run (D28). Gate 2a showed no over-fitting and no cap saturation, and
+  `rho0.3` would likely hurt the usage-predictable tools. Gate 3 inherits Gate 2a and Gate 2b only.
+
+**If Gate 2b was submitted before D28 (80 tasks), cancel the controls**, which are the last
+30 tasks: `scancel <array job id>_[50-79]`. The aggregation then never starts (`afterok`).
+Once tasks 0-49 finish, submit it by hand, but first `git pull` so the aggregation reads the
+5-arm `gate2b.json`:
+
+```bash
+git pull
+sbatch --job-name=gate2b-aggregate slurm/cpu.sbatch python -m rulfuse.cli aggregate --study gate2b
+```
 
 `slurm/study.sh STUDY` does three things in order:
 
@@ -816,15 +824,15 @@ much longer, stop and ask before submitting: the limit is changed in `slurm/arra
 never by shrinking a study.
 
 **Check the A1 speed-up (after submitting Gate 2b).** Once 4 trained tasks have finished (not
-the copied default, not the seed-0 controls), run:
+the copied default), run:
 
 ```bash
 for f in "$RULFUSE_DATA_ROOT"/runs/gate2b/{no-trajectory-aug,no-phase-a,tokens-relative,tokens-absolute}/fold-*/seed-*/selection.json; do [ -f "$f" ] && python -c "import json,sys;print(sys.argv[1], round(json.load(open(sys.argv[1]))['seconds']/60,1),'min')" "$f"; done
 sacct -j <gate2b array job id> --format=JobID,Elapsed,State,NodeList
 ```
 
-If a trained task's `Elapsed` exceeds 2:00:00, tell Claude: the sweep and every later study
-then switch to seed 0 only (D27 fallback).
+If a trained task's `Elapsed` exceeds 2:00:00, tell Claude: every later study
+then switches to seed 0 only (D27 fallback).
 
 **Resuming.** If tasks hit the time limit or a node fails, run the same command again:
 
@@ -869,7 +877,7 @@ New-Item -ItemType Directory -Force D:\RULModel\runs\sanity, D:\RULModel\runs\pi
 scp "${Ruche}:$R/sanity/report.json" D:\RULModel\runs\sanity\
 scp "${Ruche}:$R/pilot/REPORT.md" "${Ruche}:$R/pilot/decision.json" "${Ruche}:$R/pilot/summary.csv" D:\RULModel\runs\pilot\
 
-foreach ($s in "gate2a", "gate2b", "sweep") {
+foreach ($s in "gate2a", "gate2b") {
     New-Item -ItemType Directory -Force "D:\RULModel\runs\$s" | Out-Null
     scp "${Ruche}:$R/$s/REPORT.md" "${Ruche}:$R/$s/decision.json" "${Ruche}:$R/$s/summary.csv" "D:\RULModel\runs\$s\"
 }
@@ -958,10 +966,10 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 | Stage 4: sanity checks (J4) + pilot (J1) | `bash slurm/stage4.sh` (§15.2) |
 | Pilot alone | `bash slurm/study.sh pilot` |
 | Sanity checks alone, some of them | `sbatch --job-name=J4-sanity --partition=gpua100 --time=06:00:00 slurm/job.sbatch python -m rulfuse.cli sanity --device cuda --checks 1 2` |
-| Time per fit (sets J5-J7 limits) | `grep '"seconds"' "$RULFUSE_DATA_ROOT"/runs/pilot/F1-default/fold-T1/seed-*/selection.json` |
+| Time per fit (sets J5-J6 limits) | `grep '"seconds"' "$RULFUSE_DATA_ROOT"/runs/pilot/F1-default/fold-T1/seed-*/selection.json` |
 | Gate 2a (J5), then read `$RULFUSE_DATA_ROOT/runs/gate2a/REPORT.md` | `bash slurm/study.sh gate2a` |
 | Gate 2b (J6), after Gate 2a's decision | `git pull` (only now: Gate 2a ran the earlier code), then `bash slurm/study.sh gate2b` |
-| Sweep (J7), after Gate 2b's decision | `bash slurm/study.sh sweep` |
+| Gate 2b submitted before D28 (80 tasks): cancel the controls | `scancel <array job id>_[50-79]`, then after tasks 0-49 finish: `git pull` and `sbatch --job-name=gate2b-aggregate slurm/cpu.sbatch python -m rulfuse.cli aggregate --study gate2b` (§15.3) |
 | Finish an interrupted study | the same `bash slurm/study.sh STUDY` (skips `DONE` fits, resumes the rest) |
 | Aggregate a study alone | `sbatch slurm/cpu.sbatch python -m rulfuse.cli aggregate --study STUDY` |
 | Write a manifest only | `python -m rulfuse.cli manifest --study STUDY` (login node, seconds) |
