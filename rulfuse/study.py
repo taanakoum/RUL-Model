@@ -386,6 +386,19 @@ def _per_unit(rows: list[dict], arm: str) -> np.ndarray:
     return np.array([r["window_mae_s"] for r in mine])
 
 
+def _json_value(x):
+    """JSON fallback: sets (Rule B's ``tied``) as sorted lists, numpy values as numbers."""
+    if isinstance(x, (set, frozenset)):
+        return sorted(x)
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    if isinstance(x, np.bool_):
+        return bool(x)
+    if isinstance(x, np.integer):
+        return int(x)
+    return float(x)
+
+
 def decide(study: Study, rows: list[dict], config_of) -> dict:
     rule = study.spec["decision"]
     kind, threshold = rule["type"], float(rule.get("threshold_s", 10.0))
@@ -467,7 +480,7 @@ def aggregate(study: Study, runs: Path | None = None, store: SegmentStore | None
     decision["study"] = study.name
     decision["validation_only"] = True
     (out_dir / "decision.json").write_text(
-        json.dumps(decision, indent=1, default=float), encoding="utf-8"
+        json.dumps(decision, indent=1, default=_json_value), encoding="utf-8"
     )
     (out_dir / "REPORT.md").write_text(render_report(study, rows, decision), encoding="utf-8")
     return decision
@@ -504,7 +517,7 @@ def render_report(study: Study, rows: list[dict], decision: dict) -> str:
         "## Decision",
         "",
         "```json",
-        json.dumps(decision, indent=1, default=float),
+        json.dumps(decision, indent=1, default=_json_value),
         "```",
         "",
     ]

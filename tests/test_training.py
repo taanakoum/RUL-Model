@@ -11,7 +11,14 @@ import pytest
 import torch
 
 from rulfuse.config import FitConfig
-from rulfuse.study import Study, aggregate, decide, read_validation_rows, write_manifest
+from rulfuse.study import (
+    Study,
+    _json_value,
+    aggregate,
+    decide,
+    read_validation_rows,
+    write_manifest,
+)
 from rulfuse.train import _lr, fit
 from tests.toy_engine import TINY, build_toy
 
@@ -140,6 +147,11 @@ def test_gate_decisions(tmp_path):
         study, rows[:-1] + [{"arm": "F0-a", "fold_test": "T9", "done": False}], None
     )
     assert incomplete["complete"] is False
+    # decision.json must serialize (Gate 2a's aggregation failed on Rule B's ``tied`` set)
+    for o in (out, out2, out3):
+        back = json.loads(json.dumps(o, default=_json_value))
+        rules = [v for v in back.values() if isinstance(v, dict)]
+        assert all(isinstance(v.get("tied", []), list) for v in rules)
 
 
 def test_manifest_and_aggregate_on_a_toy_study(toy, tmp_path):
