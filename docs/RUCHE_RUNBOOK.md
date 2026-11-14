@@ -819,7 +819,7 @@ never by shrinking a study.
 the copied default, not the seed-0 controls), run:
 
 ```bash
-for f in runs/gate2b/{no-trajectory-aug,no-phase-a,tokens-relative,tokens-absolute}/fold-*/seed-*/selection.json; do [ -f "$f" ] && python -c "import json,sys;print(sys.argv[1], round(json.load(open(sys.argv[1]))['seconds']/60,1),'min')" "$f"; done
+for f in "$RULFUSE_DATA_ROOT"/runs/gate2b/{no-trajectory-aug,no-phase-a,tokens-relative,tokens-absolute}/fold-*/seed-*/selection.json; do [ -f "$f" ] && python -c "import json,sys;print(sys.argv[1], round(json.load(open(sys.argv[1]))['seconds']/60,1),'min')" "$f"; done
 sacct -j <gate2b array job id> --format=JobID,Elapsed,State,NodeList
 ```
 
@@ -959,7 +959,7 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 | Pilot alone | `bash slurm/study.sh pilot` |
 | Sanity checks alone, some of them | `sbatch --job-name=J4-sanity --partition=gpua100 --time=06:00:00 slurm/job.sbatch python -m rulfuse.cli sanity --device cuda --checks 1 2` |
 | Time per fit (sets J5-J7 limits) | `grep '"seconds"' "$RULFUSE_DATA_ROOT"/runs/pilot/F1-default/fold-T1/seed-*/selection.json` |
-| Gate 2a (J5), then read `runs/gate2a/REPORT.md` | `bash slurm/study.sh gate2a` |
+| Gate 2a (J5), then read `$RULFUSE_DATA_ROOT/runs/gate2a/REPORT.md` | `bash slurm/study.sh gate2a` |
 | Gate 2b (J6), after Gate 2a's decision | `git pull` (only now: Gate 2a ran the earlier code), then `bash slurm/study.sh gate2b` |
 | Sweep (J7), after Gate 2b's decision | `bash slurm/study.sh sweep` |
 | Finish an interrupted study | the same `bash slurm/study.sh STUDY` (skips `DONE` fits, resumes the rest) |
