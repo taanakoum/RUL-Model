@@ -406,10 +406,7 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         return 3
     n = sum(1 for _ in path.open(encoding="utf-8")) - 1
     print(f"{path}: {n} tasks ({len(study.arms)} arms; seeds {study.seeds})")
-    if study.inner:  # the inner fits need their outer fits first: two dependent arrays
-        print(f"submit with: bash slurm/study.sh {args.study}  (outer array, then inner array)")
-    else:
-        print(f"submit: sbatch --array=0-{n - 1}%4 slurm/array.sbatch {args.study}")
+    print(f"submit with: bash slurm/study.sh {args.study}  (it packs and orders the tasks)")
     return 0
 
 

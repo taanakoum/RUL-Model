@@ -9,5 +9,5 @@ The current protocol uses seed 0. Tests marked `compatibility` exercise retained
 multi-seed APIs separately; they do not impose a three-seed production requirement.
 
 Failures in the new strict acceptance tests are actionable results, not expected-failure
-placeholders. Do not weaken them to match defective behavior. See the dated review in
-`docs/TEST_REVIEW_2026-11-15.md` for the initial findings, priorities and coverage limits.
+placeholders. Do not weaken them to match defective behavior. `docs/TESTING.md` lists the
+categories, the commands and the remaining coverage gaps.

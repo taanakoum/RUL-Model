@@ -2,11 +2,10 @@
 
 **Project plan, version 2.** 2026-11-04. Target completion 2026-12-16.
 
-Version 2 follows a full review of version 1. [PLAN_REVIEW.md](PLAN_REVIEW.md)
-lists every finding, the change it caused and why. Version 1 is kept in
-[docs/archive/PROJECT_PLAN_v1.md](docs/archive/PROJECT_PLAN_v1.md).
+Version 2 follows a full review of version 1; every finding of that review, the change it
+caused and why, was applied here.
 
-Status: **Stages 0-2 done** (2026-11-04; see [PROJECT_LOG.md](PROJECT_LOG.md),
+Status: **Stages 0-2 done** (2026-11-04; see
 [docs/EDA_RUL.md](docs/EDA_RUL.md) and [docs/END_TO_END.md](docs/END_TO_END.md)). Every number below was measured
 on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 `experiment_results/eda/records.csv`, and on the chip and workpiece photos in
@@ -1423,7 +1422,7 @@ the vendored loader with OmniFuser's whenever both are present.
 
 | What | Where | Why |
 |---|---|---|
-| Code, configs, docs, tests | `C:\Users\ali_a\OneDrive\Desktop\RUL Model` (git) | Small; synced |
+| Code, configs, docs, tests | the laptop clone of this repository (git) | Small; synced |
 | Raw data copy (force, labels, tool, chip, work), stores, caches, runs | `RULFUSE_DATA_ROOT` = `D:\RULModel` | Gigabytes of memory-mapped files must not sync through OneDrive (locks, slow sync) |
 | Python environment | `D:\RULModel\.venv`, Python 3.11 or 3.12 | The encoder libraries (momentfm, mantis-tsfm, chronos-forecasting) lag behind Python 3.14, which OmniFuser's venv uses. The same minor version is used on Ruche |
 | Hugging Face weights | `$WORKDIR/hf_cache` on Ruche only (none on the laptop) | Offline loading in jobs |

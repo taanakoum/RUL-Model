@@ -1,7 +1,7 @@
 # Testing RULfuse
 
 The tests check the implementation against `PROJECT_PLAN.md` section 15, the accepted
-decision amendments, `EDA.md`, `docs/EDA_RUL.md`, and the OmniFuser-RUL plan. The current
+decision amendments, `docs/EDA_RUL.md`, and the OmniFuser-RUL plan. The current
 studies use **one seed, seed 0**. Historical three-seed experiments are not acceptance
 requirements for the current protocol.
 

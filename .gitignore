@@ -17,3 +17,27 @@ dist/
 .ruff_cache/
 /.coverage*
 /htmlcov/
+
+# Kept on the laptop only, not published (2026-11-15). Already tracked files also need
+# `git rm --cached` once (see the commit that added these lines).
+# Tooling and working notes
+/CLAUDE.md
+/.claude/
+/PROJECT_LOG.md
+/.coverage
+# OmniFuser-era documents, superseded by PROJECT_PLAN.md and docs/
+/EDA.md
+/END_TO_END_SIM.md
+/FIXES_AND_VALIDATION.md
+/IMPLEMENTATION_AUDIT.md
+/PAPER_IMPLEMENTATION_ALIGNMENT.md
+/PLAN_REVIEW.md
+/TRAINING_RUNBOOK_RUCHE.md
+/docs/archive/
+# Cluster operations, internal briefs, audit and test-review records
+/docs/RUCHE_RUNBOOK.md
+/docs/B6_REPORT_BRIEF.md
+/docs/AUDIT_2026-11-15*
+/docs/audit_reproductions_2026_11_15.py
+/docs/TEST_REVIEW_2026-11-15*
+*.evidence.json
