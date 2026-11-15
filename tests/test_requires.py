@@ -10,6 +10,8 @@ import pytest
 
 from rulfuse.study import Study, write_manifest
 
+pytestmark = [pytest.mark.integration, pytest.mark.requirements("P20", "D31")]
+
 UNITS = [f"T{i}" for i in range(1, 6)]
 
 

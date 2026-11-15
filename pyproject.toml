@@ -57,6 +57,7 @@ markers = [
     "slow: training or other checks unsuitable for the fast feedback loop",
     "gpu: requires a CUDA device; skipped when unavailable",
     "system: subprocess, shell, scheduler, or command-line interface checks",
+    "compatibility: retained multi-seed API behavior; not required by current one-seed studies",
     "requirements(*ids): requirements from PROJECT_PLAN.md P1-P22 and decisions D*/O*",
     "data: needs the real Nonastreda data under RULFUSE_DATA_ROOT (skipped when absent)",
     "weights: loads a real pretrained checkpoint from the Hugging Face cache (skipped when absent)",

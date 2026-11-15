@@ -987,7 +987,16 @@ The audit's fixes are in `docs/AUDIT_2026-11-15_FIXES.md`; the plan is D31. In o
    Send me the report. Its log should show "identical fit found, copied" for every F1 line;
    if an F1 line trains instead, stop and tell me.
 
-4. **Gate 3**, after `gate2a-fix`'s `decision.json` exists (4 outer tasks copy in minutes, then
+4. **Gate 2b-fix**, after `gate2a-fix`'s `decision.json` exists. It runs only if F0 won;
+   if F1 won it prints "nothing submitted" and writes a 'skipped' decision, which is fine.
+   If it runs: about 14 GPU tasks of about 1.5 h (3 fits side by side), the default arm copied.
+
+   ```bash
+   bash slurm/study.sh gate2b-fix
+   cat "$RULFUSE_DATA_ROOT/runs/gate2b-fix/REPORT.md"      # send it to me
+   ```
+
+5. **Gate 3**, after `gate2b-fix`'s `decision.json` exists (4 outer tasks copy in minutes, then
    14 inner tasks of about 1-1.5 h):
 
    ```bash

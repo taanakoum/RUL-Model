@@ -100,6 +100,7 @@ def test_gate3_end_to_end_on_the_toy(toy, tmp_path):
     fold = toy.folds[0]
     study = Study("g3", _spec(toy, fold))
     path = write_manifest(study, toy.store.unit_names, tmp_path)
+    assert path is not None
     rows = read_manifest(path)
     assert [r["inner"] for r in rows] == ["-1", "0", "1"]  # outer first, then inner
     assert aggregate(study, tmp_path, store=toy.store)["complete"] is False  # nothing run yet

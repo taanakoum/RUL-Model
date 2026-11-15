@@ -8,6 +8,13 @@ from __future__ import annotations
 
 LEVELS = frozenset({"unit", "integration", "e2e"})
 
+COMPATIBILITY_TESTS = {
+    "test_manifest_and_aggregate_on_a_toy_study",
+    "test_per_arm_seeds_reuse_and_parallel_seeds",
+    "test_gate3_end_to_end_on_the_toy",
+    "test_the_ensemble_averages_the_seeds",
+}
+
 # filename: (default level, verification requirements)
 LEGACY = {
     "test_audit.py": ("unit", ("P3", "P9")),
@@ -46,27 +53,38 @@ LEGACY = {
 }
 
 UNIT_OVERRIDES = {
-    "test_learning_rate_schedule_phases", "test_gate_decisions",
-    "test_student_t_head_ranges_and_nll", "test_windows_and_resampling",
-    "test_decode_record_id_accepts_file_names", "test_duplicate_groups_within_runs_only",
-    "test_inner_split_never_touches_validation_or_test", "test_fit_q_scores_only_the_masked_points",
+    "test_learning_rate_schedule_phases",
+    "test_gate_decisions",
+    "test_student_t_head_ranges_and_nll",
+    "test_windows_and_resampling",
+    "test_decode_record_id_accepts_file_names",
+    "test_duplicate_groups_within_runs_only",
+    "test_inner_split_never_touches_validation_or_test",
+    "test_fit_q_scores_only_the_masked_points",
     "test_pooled_and_without_thinnest_summaries_use_the_points",
-    "test_select_epoch_uses_three_consecutive_values", "test_the_ensemble_averages_the_seeds",
-    "test_shapley_values_are_exact", "test_two_modalities_are_judged_on_a_preset_paired_test",
-    "test_the_study_arms", "test_the_training_loss_moves_only_the_earlier_prediction",
+    "test_select_epoch_uses_three_consecutive_values",
+    "test_the_ensemble_averages_the_seeds",
+    "test_shapley_values_are_exact",
+    "test_two_modalities_are_judged_on_a_preset_paired_test",
+    "test_the_study_arms",
+    "test_the_training_loss_moves_only_the_earlier_prediction",
     "test_a_stuck_later_prediction_moves_the_earlier_one_only_a_little",
-    "test_generic_code_never_imports_an_adapter", "test_generic_code_has_no_nonastreda_vocabulary",
+    "test_generic_code_never_imports_an_adapter",
+    "test_generic_code_has_no_nonastreda_vocabulary",
 }
 
 E2E_OVERRIDES = {
     "test_fit_selects_the_smoothed_minimum_and_writes_its_outputs",
     "test_same_seed_same_weights_and_resume_after_a_kill",
-    "test_manifest_and_aggregate_on_a_toy_study", "test_per_arm_seeds_reuse_and_parallel_seeds",
+    "test_manifest_and_aggregate_on_a_toy_study",
+    "test_per_arm_seeds_reuse_and_parallel_seeds",
     "test_a_finished_fit_of_another_computation_is_never_skipped",
     "test_a_checkpoint_of_another_computation_is_not_resumed",
-    "test_an_image_free_dataset_trains_and_predicts", "test_aggregation_flags_mixed_code_versions",
+    "test_an_image_free_dataset_trains_and_predicts",
+    "test_aggregation_flags_mixed_code_versions",
     "test_inner_fit_reproduces_the_outer_fit_at_its_selected_step",
-    "test_gate3_end_to_end_on_the_toy", "test_incomplete_study_does_not_freeze",
+    "test_gate3_end_to_end_on_the_toy",
+    "test_incomplete_study_does_not_freeze",
     "test_a_fit_learns_the_toy_rul_and_a_shuffled_control_does_not",
     "test_predictions_cover_every_point_with_the_grid_flag_and_runs_resume",
     "test_a_fine_fit_predicts_every_1s_point_and_selects_on_the_grid",
@@ -77,7 +95,8 @@ E2E_OVERRIDES = {
     "test_the_run_report_keeps_the_test_sealed_before_the_freeze",
     "test_the_run_report_with_unseal_and_after_the_freeze",
     "test_the_mode_comparison_finds_a_real_difference",
-    "test_toy_feature_check_and_baselines", "test_score_feature_baselines_scores_validation_units_only",
+    "test_toy_feature_check_and_baselines",
+    "test_score_feature_baselines_scores_validation_units_only",
 }
 
 

@@ -19,22 +19,36 @@ from rulfuse.study import Study, ensemble_validation, fit_dir, write_manifest
 from rulfuse.tokens import build_fold_data
 from tests.factories import MICRO
 
-pytestmark = [pytest.mark.integration, pytest.mark.adversarial,
-              pytest.mark.requirements("P8", "P14", "P15", "P20", "P21")]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.adversarial,
+    pytest.mark.requirements("P8", "P14", "P15", "P20", "P21"),
+]
 
 
 def prediction_rows():
-    return {"unit": np.array(["V", "V"]), "role": np.array(["validation"] * 2),
-            "tau_s": np.array([1., 2.]), "segment": np.array([0, 1]),
-            "rul_s": np.array([5., 4.]), "window": np.array([True, True]),
-            "mu_s": np.array([4., 3.]), "sigma_s": np.array([1., 1.]),
-            "nu": np.array([5., 5.])}
+    return {
+        "unit": np.array(["V", "V"]),
+        "role": np.array(["validation"] * 2),
+        "tau_s": np.array([1.0, 2.0]),
+        "segment": np.array([0, 1]),
+        "rul_s": np.array([5.0, 4.0]),
+        "window": np.array([True, True]),
+        "mu_s": np.array([4.0, 3.0]),
+        "sigma_s": np.array([1.0, 1.0]),
+        "nu": np.array([5.0, 5.0]),
+    }
 
 
-@pytest.mark.parametrize("field,value", [
-    ("unit", np.array(["foreign", "foreign"])), ("rul_s", np.array([50., 40.])),
-    ("window", np.array([False, True])),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("unit", np.array(["foreign", "foreign"])),
+        ("rul_s", np.array([50.0, 40.0])),
+        ("window", np.array([False, True])),
+    ],
+)
+@pytest.mark.compatibility
 def test_calibration_seed_members_must_agree_on_unit_truth_and_window(field, value):
     first, second = prediction_rows(), prediction_rows()
     second[field] = value
@@ -42,10 +56,16 @@ def test_calibration_seed_members_must_agree_on_unit_truth_and_window(field, val
         stack_seeds([first, second])
 
 
-@pytest.mark.parametrize("field,value", [
-    ("tau_s", np.array([1., 3.])), ("unit", np.array(["foreign", "foreign"])),
-    ("rul_s", np.array([50., 40.])), ("window", np.array([False, True])),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("tau_s", np.array([1.0, 3.0])),
+        ("unit", np.array(["foreign", "foreign"])),
+        ("rul_s", np.array([50.0, 40.0])),
+        ("window", np.array([False, True])),
+    ],
+)
+@pytest.mark.compatibility
 def test_main_ensemble_refuses_misaligned_seed_tables(tmp_path, field, value):
     fold = Fold("T", "V", ("A", "B"))
     for seed in (0, 1):
@@ -83,11 +103,18 @@ def test_nonfinite_encoder_outputs_cannot_be_published_as_a_complete_cache(micro
 
     b = micro_bundle
     with pytest.raises(ValueError):
-        extract_signal_features(b.store, b.dataset.signals, BrokenEncoder(dim=4),
-                                root=tmp_path / "broken", log=lambda *_: None)
+        extract_signal_features(
+            b.store,
+            b.dataset.signals,
+            BrokenEncoder(dim=4),
+            root=tmp_path / "broken",
+            log=lambda *_: None,
+        )
 
 
-def test_failed_store_rebuild_preserves_previous_complete_store(micro_bundle, tmp_path, monkeypatch):
+def test_failed_store_rebuild_preserves_previous_complete_store(
+    micro_bundle, tmp_path, monkeypatch
+):
     b = micro_bundle
     root = build_segment_store(b.dataset, tmp_path / "store")
     original = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
@@ -111,17 +138,18 @@ def test_failed_store_rebuild_preserves_previous_complete_store(micro_bundle, tm
 def test_an_incomplete_gate_cannot_supply_the_next_studys_configuration(tmp_path):
     (tmp_path / "earlier").mkdir()
     (tmp_path / "earlier/decision.json").write_text(
-        json.dumps({"complete": False, "adopted": {"lr": .003}}), encoding="utf-8",
+        json.dumps({"complete": False, "adopted": {"lr": 0.003}}),
+        encoding="utf-8",
     )
-    study = Study("next", {"inherits": ["earlier"], "arms": {"a": {}},
-                           "decision": {"type": "none"}})
+    study = Study(
+        "next", {"inherits": ["earlier"], "arms": {"a": {}}, "decision": {"type": "none"}}
+    )
     with pytest.raises((ValueError, RuntimeError)):
         write_manifest(study, ["A", "B", "C"], tmp_path)
     assert not (tmp_path / "next/manifest.tsv").exists()
 
 
 def test_unknown_fold_names_cannot_silently_create_an_empty_study(tmp_path):
-    study = Study("bad-fold", {"folds": ["typo"], "arms": {"a": {}},
-                               "decision": {"type": "none"}})
+    study = Study("bad-fold", {"folds": ["typo"], "arms": {"a": {}}, "decision": {"type": "none"}})
     with pytest.raises(ValueError):
         write_manifest(study, ["A", "B", "C"], tmp_path)

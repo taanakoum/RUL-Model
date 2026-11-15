@@ -18,8 +18,10 @@ from rulfuse.train import fit
 from tests.factories import MICRO
 from tests.helpers import synthetic_dataset_files
 
-pytestmark = [pytest.mark.e2e,
-              pytest.mark.requirements("P1", "P2", "P3", "P4", "P5", "P8", "P14", "P22")]
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.requirements("P1", "P2", "P3", "P4", "P5", "P8", "P14", "P22"),
+]
 
 
 def test_mat_csv_adapter_roundtrip_preserves_gaps_duplicates_truth_and_fit(tmp_path):
@@ -43,10 +45,16 @@ def test_mat_csv_adapter_roundtrip_preserves_gaps_duplicates_truth_and_fit(tmp_p
         rows = store.segment_rows(unit)
         points = store.segments["is_prediction_point"][rows].astype(bool)
         tau = store.segments["tau_s"][rows].astype(float)
-        np.testing.assert_allclose(store.segments["rul_s"][rows][points],
-                                   store.units[unit]["failure_s"] - tau[points])
-    signal = extract_signal_features(store, dataset.signals, ProjectionEncoder(dim=4),
-                                     root=tmp_path / "features", log=lambda *_: None)
+        np.testing.assert_allclose(
+            store.segments["rul_s"][rows][points], store.units[unit]["failure_s"] - tau[points]
+        )
+    signal = extract_signal_features(
+        store,
+        dataset.signals,
+        ProjectionEncoder(dim=4),
+        root=tmp_path / "features",
+        log=lambda *_: None,
+    )
     fold = leave_one_unit_out(store.unit_names)[0]
     config = MICRO.with_overrides({"players": ("signal",)})
     result = fit(store, signal, None, fold, 0, config, tmp_path / "fit", log=lambda *_: None)

@@ -10,15 +10,25 @@ pytest.importorskip("torchvision", reason="B6 needs torchvision")
 
 from rulfuse.omnifuser_rul.aggregate import ensemble  # noqa: E402
 
-pytestmark = [pytest.mark.integration, pytest.mark.adversarial, pytest.mark.regression,
-              pytest.mark.requirements("P15", "P21", "D20")]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.adversarial,
+    pytest.mark.regression,
+    pytest.mark.compatibility,
+    pytest.mark.requirements("P15", "P21", "D20"),
+]
 
 
 def rows():
-    return {"role": np.array(["validation"] * 4), "fold": np.ones(4, int),
-            "row": np.array([0, 1, 0, 1]), "seed": np.array([0, 0, 1, 1]),
-            "unit": np.array(["A"] * 4), "on_grid": np.ones(4, bool),
-            "prediction_s": np.array([10., 20., 12., 22.])}
+    return {
+        "role": np.array(["validation"] * 4),
+        "fold": np.ones(4, int),
+        "row": np.array([0, 1, 0, 1]),
+        "seed": np.array([0, 0, 1, 1]),
+        "unit": np.array(["A"] * 4),
+        "on_grid": np.ones(4, bool),
+        "prediction_s": np.array([10.0, 20.0, 12.0, 22.0]),
+    }
 
 
 @pytest.mark.parametrize("corruption", ["duplicate-seed", "disjoint-seeds", "wrong-unit", "grid"])

@@ -14,8 +14,10 @@ from rulfuse.sequences import make_sequence, trajectory_plan
 from rulfuse.tokens import build_fold_data
 from tests.factories import MICRO
 
-pytestmark = [pytest.mark.integration,
-              pytest.mark.requirements("P3", "P5", "P7", "P9", "P10", "P13", "D14", "D18")]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.requirements("P3", "P5", "P7", "P9", "P10", "P13", "D14", "D18"),
+]
 
 
 @pytest.mark.adversarial
@@ -37,7 +39,9 @@ def test_heldout_descriptor_and_health_poison_cannot_change_training_inputs(micr
     assert original.hi_scale == changed.hi_scale
     for name in fold.train:
         np.testing.assert_array_equal(original.units[name].signal, changed.units[name].signal)
-        np.testing.assert_array_equal(original.units[name].img_readout, changed.units[name].img_readout)
+        np.testing.assert_array_equal(
+            original.units[name].img_readout, changed.units[name].img_readout
+        )
 
 
 @pytest.mark.adversarial
@@ -60,9 +64,17 @@ def test_cross_fitting_excludes_own_labels_including_hyperparameter_selection():
 @pytest.mark.adversarial
 def test_adapter_annotations_and_stage_codes_never_enter_tokens(micro_bundle, tmp_path):
     b = micro_bundle
-    changed_units = tuple(replace(u, recordings=tuple(
-        replace(r, stage=999, group="SECRET_TARGET", attrs={"target": 1e15}) for r in u.recordings
-    ), attrs={"unit_identity": "SECRET_TARGET"}) for u in b.dataset.units)
+    changed_units = tuple(
+        replace(
+            u,
+            recordings=tuple(
+                replace(r, stage=999, group="SECRET_TARGET", attrs={"target": 1e15})
+                for r in u.recordings
+            ),
+            attrs={"unit_identity": "SECRET_TARGET"},
+        )
+        for u in b.dataset.units
+    )
     ds = replace(b.dataset, units=changed_units)
     store = SegmentStore.open(build_segment_store(ds, tmp_path / "annotations"))
     a = build_fold_data(b.store, b.signal, b.image, b.folds[0], MICRO)
@@ -74,20 +86,24 @@ def test_adapter_annotations_and_stage_codes_never_enter_tokens(micro_bundle, tm
 
 
 @pytest.mark.parametrize("seed", range(10))
-def test_augmented_trajectories_preserve_baseline_failure_photos_and_exact_labels(micro_bundle, seed):
+def test_augmented_trajectories_preserve_baseline_failure_photos_and_exact_labels(
+    micro_bundle, seed
+):
     b = micro_bundle
     data = build_fold_data(b.store, b.signal, b.image, b.folds[0], MICRO)
     for unit in data.units.values():
-        plan = trajectory_plan(unit, np.random.default_rng(seed), .45)
+        plan = trajectory_plan(unit, np.random.default_rng(seed), 0.45)
         baseline = np.flatnonzero(unit.rec_baseline).tolist()
         assert all(plan.count(p) == 1 for p in baseline)
         assert plan.count(unit.failure_rec) == 1
         seq = make_sequence(unit, plan, MICRO.w_far)
         assert np.all(np.diff(seq.tau) > 0)
         assert seq.failure_s is not None
-        np.testing.assert_allclose(seq.rul[seq.point], seq.failure_s - seq.tau[seq.point], atol=1e-10)
+        np.testing.assert_allclose(
+            seq.rul[seq.point], seq.failure_s - seq.tau[seq.point], atol=1e-10
+        )
         np.testing.assert_allclose(seq.y[seq.point], np.minimum(seq.rul[seq.point], unit.horizon_s))
-        assert seq.weight.sum() == pytest.approx(1.)
+        assert seq.weight.sum() == pytest.approx(1.0)
         assert not seq.weight[~seq.point].any()
         for entry, recording in enumerate(plan):
             ids = seq.img[seq.img_entry == entry]
@@ -105,5 +121,6 @@ def test_deleting_recordings_keeps_unrecorded_operating_gaps(micro_bundle):
     last = seq.tau[np.flatnonzero(seq.entry == 1)[-1]]
     first = seq.tau[np.flatnonzero(seq.entry == 2)[0]]
     original_gap = unit.rec_start[3] - unit.rec_end[2]
-    assert first - unit.seg_elapsed[seq.seg[np.flatnonzero(seq.entry == 2)[0]]] - last \
-        == pytest.approx(original_gap)
+    assert first - unit.seg_elapsed[
+        seq.seg[np.flatnonzero(seq.entry == 2)[0]]
+    ] - last == pytest.approx(original_gap)

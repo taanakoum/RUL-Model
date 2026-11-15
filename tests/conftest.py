@@ -13,11 +13,12 @@ from pathlib import Path
 import pytest
 
 from rulfuse import paths
-from tests.catalog import LEGACY, LEVELS, legacy_level
+from tests.catalog import COMPATIBILITY_TESTS, LEGACY, LEVELS, legacy_level
 
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 _ITEMS: dict[str, dict] = {}
 _SKIPS: list[str] = []
@@ -25,8 +26,12 @@ _SKIPS: list[str] = []
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("rulfuse verification")
-    group.addoption("--requirements-report", type=Path, help="write collected requirements and outcomes")
-    group.addoption("--fail-on-skip", action="store_true", help="fail if any selected test is skipped")
+    group.addoption(
+        "--requirements-report", type=Path, help="write collected requirements and outcomes"
+    )
+    group.addoption(
+        "--fail-on-skip", action="store_true", help="fail if any selected test is skipped"
+    )
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -36,6 +41,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         filename = item.path.name
         name = getattr(item, "originalname", None) or item.name.split("[", 1)[0]
+        if name in COMPATIBILITY_TESTS:
+            item.add_marker(pytest.mark.compatibility)
         levels = [m.name for m in item.iter_markers() if m.name in LEVELS]
         if not levels and filename in LEGACY:
             dependency = bool(item.get_closest_marker("data") or item.get_closest_marker("weights"))
@@ -44,7 +51,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.requirements(*LEGACY[filename][1]))
         levels = [m.name for m in item.iter_markers() if m.name in LEVELS]
         if len(levels) != 1:
-            raise pytest.UsageError(f"{item.nodeid}: declare exactly one unit/integration/e2e level")
+            raise pytest.UsageError(
+                f"{item.nodeid}: declare exactly one unit/integration/e2e level"
+            )
         requirements = sorted({str(v) for m in item.iter_markers("requirements") for v in m.args})
         if not requirements or any(not re.fullmatch(r"(?:P|D|O)\d+", r) for r in requirements):
             raise pytest.UsageError(f"{item.nodeid}: declare valid requirements(P*, D*, O*)")
@@ -63,9 +72,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
             if not torch.cuda.is_available():
                 item.add_marker(pytest.mark.skip(reason="CUDA device unavailable"))
-        _ITEMS[item.nodeid] = {"level": levels[0], "requirements": requirements,
-                               "markers": sorted({m.name for m in item.iter_markers()}),
-                               "outcome": "not_run"}
+        _ITEMS[item.nodeid] = {
+            "level": levels[0],
+            "requirements": requirements,
+            "markers": sorted({m.name for m in item.iter_markers()}),
+            "outcome": "not_run",
+        }
 
 
 def pytest_collectreport(report: pytest.CollectReport) -> None:
@@ -92,10 +104,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     selected = {item.nodeid for item in session.items}
     entries = {key: value for key, value in _ITEMS.items() if key in selected}
     report = {
-        "exit_code": int(session.exitstatus), "collected": session.testscollected,
-        "selected": len(entries), "outcomes": dict(Counter(v["outcome"] for v in entries.values())),
+        "exit_code": int(session.exitstatus),
+        "collected": session.testscollected,
+        "selected": len(entries),
+        "outcomes": dict(Counter(v["outcome"] for v in entries.values())),
         "levels": dict(Counter(v["level"] for v in entries.values())),
-        "skipped_nodes": _SKIPS, "tests": entries,
+        "skipped_nodes": _SKIPS,
+        "tests": entries,
     }
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

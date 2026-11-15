@@ -1432,4 +1432,18 @@ aggregation.
 
 **Disclosures this creates:** the one-seed F0-against-F1 comparison is noisier than the gate
 threshold (Gate 2a seed sd 35.6 s against 10 s); F0's learning rate comes from leak-trained fits;
-Gate 2b's options are the plan defaults, untested; the intervals have no seed spread.
+the intervals have no seed spread.
+
+**Gate 2b rerun after all (your request, same day): `configs/studies/gate2b-fix.json`.** Gate 2b's
+5 arms and rules with one seed, inheriting `gate2a-fix`, run only if it adopted F0
+(`"requires": {"fusion": "F0"}`, new in `rulfuse/study.py`). If F1 wins, `rulfuse manifest`
+writes a 'skipped' decision that passes `gate2a-fix`'s adoptions on, exits with code 3, and
+`slurm/study.sh` submits nothing. The default arm equals `gate2a-fix`'s F0 lr 3e-3 and is copied,
+so 40 fits are trained (about 14 GPU tasks, about 20 GPU-h, 5-6 h). Gate 3 inherits `gate2a-fix`
+and `gate2b-fix`, so it works whichever family wins. Checked: dry runs on the real store for
+both outcomes (F0: 50 lines, default arm copied, Gate 3 design F0; F1: skipped, Gate 3 design
+F1); `tests/test_requires.py`. If F1 wins, Gate 2b's options stay the plan defaults, untested.
+
+**Full suite on the tree with Codex's new tests:** everything passes except 15 cases of Codex's
+`tests/unit/test_input_validation.py`, which ask for input checks the code does not have yet
+(an invalid horizon, Student-t scale, Kalman noise, fit configuration); Codex is working on them.

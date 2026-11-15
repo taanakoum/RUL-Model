@@ -37,12 +37,17 @@ def test_first_future_photo_cannot_change_any_earlier_output(micro_bundle, fusio
     assert before.any() and (~before).any()
     with torch.no_grad():
         original = model(batch, tensors)
-        tensors.images[0] += 20.
-        tensors.img_readout[0] += 20.
+        tensors.images[0] += 20.0
+        tensors.img_readout[0] += 20.0
         changed = model(batch, tensors)
     for field in ("mu", "sigma", "nu", "hi"):
-        torch.testing.assert_close(original[field][0, before], changed[field][0, before],
-                                   rtol=0, atol=0, msg=f"{fusion}/{mode}/{field} reads future photo")
+        torch.testing.assert_close(
+            original[field][0, before],
+            changed[field][0, before],
+            rtol=0,
+            atol=0,
+            msg=f"{fusion}/{mode}/{field} reads future photo",
+        )
 
 
 @pytest.mark.parametrize("fusion", ["F0", "F1"])
@@ -52,10 +57,12 @@ def test_future_signal_tokens_cannot_change_outputs_or_gradients(micro_bundle, f
     cut = len(sequence.seg) // 2
     with torch.no_grad():
         original = model(batch, tensors)
-        tensors.signal[cut:] += 100.
+        tensors.signal[cut:] += 100.0
         changed = model(batch, tensors)
     for field in ("mu", "sigma", "nu", "hi"):
-        torch.testing.assert_close(original[field][:, :cut], changed[field][:, :cut], rtol=0, atol=0)
+        torch.testing.assert_close(
+            original[field][:, :cut], changed[field][:, :cut], rtol=0, atol=0
+        )
     tensors.signal.requires_grad_(True)
     model(batch, tensors)["mu"][0, cut - 1].backward()
     assert tensors.signal.grad is not None
@@ -69,15 +76,17 @@ def test_gradient_cannot_reach_a_photo_before_it_exists(micro_bundle, fusion):
     tensors.images.requires_grad_(True)
     model(batch, tensors)["mu"][0, 0].backward()
     assert tensors.images.grad is not None
-    assert torch.count_nonzero(tensors.images.grad) == 0, "future photos have a causal gradient path"
+    assert torch.count_nonzero(tensors.images.grad) == 0, (
+        "future photos have a causal gradient path"
+    )
 
 
 @pytest.mark.parametrize("fusion", ["F0", "F1"])
 def test_usage_off_is_invariant_to_a_common_shift_of_operating_time(micro_bundle, fusion):
     _, _, model, tensors, _, batch = inputs(micro_bundle, fusion, usage=False)
     shifted = {k: v.clone() for k, v in batch.items()}
-    shifted["tau"] += 200.
-    shifted["img_time"] += 200.
+    shifted["tau"] += 200.0
+    shifted["img_time"] += 200.0
     with torch.no_grad():
         a, b = model(batch, tensors), model(shifted, tensors)
     for field in ("mu", "sigma", "nu", "hi"):

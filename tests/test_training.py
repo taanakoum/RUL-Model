@@ -165,6 +165,7 @@ def test_manifest_and_aggregate_on_a_toy_study(toy, tmp_path):
     }
     study = Study("toystudy", spec)
     path = write_manifest(study, toy.store.unit_names, tmp_path)
+    assert path is not None
     lines = path.read_text(encoding="utf-8").splitlines()
     assert lines[1].split("\t") == ["0", "tiny", toy.folds[0].test, "0,1"]
     from rulfuse.study import run_task
@@ -230,7 +231,9 @@ def test_per_arm_seeds_reuse_and_parallel_seeds(toy, tmp_path):
             "decision": {"type": "none"},
         },
     )
-    lines = write_manifest(second, toy.store.unit_names, tmp_path).read_text().splitlines()
+    path = write_manifest(second, toy.store.unit_names, tmp_path)
+    assert path is not None
+    lines = path.read_text().splitlines()
     assert lines[2].split("\t")[3] == "0"  # B2: the control runs on seed 0 only
     run_task(second, 0, "cpu", tmp_path, **kw)
     for seed in (0, 1):
