@@ -1410,3 +1410,26 @@ B1 copies of inner fits; aggregation, report, freeze and its refusals; pooled an
 without-thinnest means; reuse refuses other encoders and older code. Real-store dry run: with
 stub decisions `rulfuse manifest --study gate3` writes 50 tasks (10 outer, 40 inner) and all 10
 folds have 4 inner splits of 2 held-out and 6 fitted tools.
+
+## 2026-11-15 — D31: one seed and a minimal rerun after F01
+
+You have no time for 3 seeds. Decided: one seed for every remaining study; F1's Gate 2a fits
+(unaffected by F01) are reused; only F0 at lr 3e-3 is retrained with the fixed code and compared
+with F1 at lr 3e-3 by Gate 2a's family rule (`configs/studies/gate2a-fix.json`, 20 manifest
+lines: 10 F1 copies, 10 F0 fits); Gate 2b is not rerun (plan defaults); Gate 3 inherits
+`gate2a-fix` with one seed (`gate3.json`).
+
+**Packing (no change to results).** With one seed a fit leaves the GPU mostly idle, as one seed
+of a task did before A1. `slurm/study.sh` now packs 3 manifest lines into one array task
+(`slurm/array.sbatch STUDY PACK FIRST LAST`, `run-task --parallel-tasks`), separately for the
+outer and the inner lines of Gate 3. Test: two lines side by side give the same weights as one
+after another at the same CPU thread count (on the CPU the sums depend on the thread count, about
+2e-5; on the GPU the threads do not enter). Dry runs with stub `sbatch`: `gate2a-fix` = 7 GPU
+tasks for 20 lines; `gate3` = 4 outer tasks, then 14 inner tasks waiting for them, then the
+aggregation.
+
+**Estimate:** about 20-26 GPU-h in all instead of about 140 (D30 A with 3 seeds).
+
+**Disclosures this creates:** the one-seed F0-against-F1 comparison is noisier than the gate
+threshold (Gate 2a seed sd 35.6 s against 10 s); F0's learning rate comes from leak-trained fits;
+Gate 2b's options are the plan defaults, untested; the intervals have no seed spread.

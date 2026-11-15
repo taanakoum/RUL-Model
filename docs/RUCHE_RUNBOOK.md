@@ -951,27 +951,54 @@ This writes `configs/final.json` (the design, the calibration choice, the hash) 
 repository on Ruche: copy it home or commit it from Ruche, then you commit it (D15: after this,
 nothing about the model changes before the test scores are read).
 
-### 15.7 After the 2026-11-15 audit
+### 15.7 After the 2026-11-15 audit: one seed, minimal rerun (D31)
 
-The audit's fixes are described in `docs/AUDIT_2026-11-15_FIXES.md`. Three things to do on
-Ruche:
+The audit's fixes are in `docs/AUDIT_2026-11-15_FIXES.md`; the plan is D31. In order:
 
-1. **Do not `git pull` while Gate 2b's array still has tasks waiting or running.** A task that
-   starts after the pull would train the fixed F0 while the others trained the old one. Wait
-   until `squeue -u "$USER"` shows no `gate2b` task (the aggregation may run after the pull: it
-   only reads the fits, and reports their code versions).
-2. **After the pull, check the GPU resume once** (a few minutes, toy data):
+1. **Stop Gate 2b.** Its results decide nothing now (every arm is leak-trained F0):
+
+   ```bash
+   squeue -u "$USER" -o "%.18i %.20j %.2t"      # find the gate2b array and its aggregation
+   scancel <gate2b array id> <gate2b-aggregate id>
+   ```
+
+   Only once no `gate2b` task is left, update the code (a task starting after the pull would
+   train the fixed F0):
+
+   ```bash
+   cd "$WORKDIR/RUL-Model" && git pull && source slurm/env.sh
+   ```
+
+2. **Check the GPU resume once** (a few minutes, toy data; must print PASS):
 
    ```bash
    sbatch --job-name=cuda-resume --time=00:30:00 slurm/job.sbatch python scripts/check_cuda_resume.py
    tail -n 5 runs/logs/cuda-resume-*.out
    ```
 
-   It must print PASS. INCONCLUSIVE means two uninterrupted GPU runs already differ; send me
-   the log either way.
-3. **Do not resubmit `gate2a` or `gate2b` after the pull.** Their F0 fits are code version 1, so
-   `run-task` stops with `StaleFitError` rather than counting them as current. Reruns go under
-   new study names once we have decided D30 (PROJECT_PLAN.md, decision table).
+3. **Gate 2a check** (F1 copied from Gate 2a, F0 lr 3e-3 retrained; about 4 GPU tasks of
+   about 1.5 h, 3 fits side by side each):
+
+   ```bash
+   bash slurm/study.sh gate2a-fix
+   cat "$RULFUSE_DATA_ROOT/runs/gate2a-fix/REPORT.md"      # when the aggregation is done
+   ```
+
+   Send me the report. Its log should show "identical fit found, copied" for every F1 line;
+   if an F1 line trains instead, stop and tell me.
+
+4. **Gate 3**, after `gate2a-fix`'s `decision.json` exists (4 outer tasks copy in minutes, then
+   14 inner tasks of about 1-1.5 h):
+
+   ```bash
+   bash slurm/study.sh gate3
+   cat "$RULFUSE_DATA_ROOT/runs/gate3/REPORT.md"
+   ```
+
+   Then the freeze, once we have agreed on the report (§15.6).
+
+Do not resubmit `gate2a` or `gate2b` after the pull: their F0 fits are code version 1 and
+`run-task` stops with `StaleFitError` rather than counting them as current.
 
 ## 16. Troubleshooting
 

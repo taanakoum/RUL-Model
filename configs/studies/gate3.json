@@ -1,5 +1,5 @@
 {
- "description": "Gate 3 (PROJECT_PLAN.md §9, decisions 9-10; job J8; D31): the design chosen by gate2a-fix (Gate 2b not rerun: plan defaults), one seed, with 4 inner fits per outer fold (each holds out 2 of the 8 training tools and trains for the outer fit's kept step) giving the out-of-fold predictions that calibrate the 90 % intervals. Outer fits are copied from gate2a-fix (B1). Method b (out-of-fold Student-t scale) and c (cross-conformal) compete by validation Winkler score under coverage in [0.85, 0.95]; method a is fitted on the validation tool and only reported. The causal filter is tested by Rule A. Nothing trained changes (D15).",
+ "description": "Gate 3 (PROJECT_PLAN.md §9, decisions 9-10; job J8; D31): the design chosen by gate2a-fix and gate2b-fix (gate2b-fix only if F0 won; otherwise its 'skipped' decision passes gate2a-fix's on), one seed, with 4 inner fits per outer fold (each holds out 2 of the 8 training tools and trains for the outer fit's kept step) giving the out-of-fold predictions that calibrate the 90 % intervals. Outer fits are copied from gate2a-fix (B1). Method b (out-of-fold Student-t scale) and c (cross-conformal) compete by validation Winkler score under coverage in [0.85, 0.95]; method a is fitted on the validation tool and only reported. The causal filter is tested by Rule A. Nothing trained changes (D15).",
  "store": "nonastreda/3e357b5a23ff",
  "signal_encoder": "mantis8m",
  "image_encoder": "dinov2b",
@@ -10,7 +10,8 @@
   ]
  },
  "inherits": [
-  "gate2a-fix"
+  "gate2a-fix",
+  "gate2b-fix"
  ],
  "seeds": [
   0

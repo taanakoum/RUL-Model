@@ -400,6 +400,10 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     study = Study.load(args.study)
     store = open_store(study.spec)
     path = write_manifest(study, store.unit_names, args.runs_root)
+    if path is None:  # not needed (``requires``): nothing to submit
+        print(f"{args.study}: not needed: {study.skip_reason(args.runs_root)}")
+        print("a 'skipped' decision.json was written; later studies inherit the earlier ones")
+        return 3
     n = sum(1 for _ in path.open(encoding="utf-8")) - 1
     print(f"{path}: {n} tasks ({len(study.arms)} arms; seeds {study.seeds})")
     if study.inner:  # the inner fits need their outer fits first: two dependent arrays

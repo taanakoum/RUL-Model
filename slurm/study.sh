@@ -19,7 +19,15 @@ exclude=$(bash slurm/exclude.sh)  # known bad GPU nodes (slurm/bad_nodes.txt)
 cd "$(dirname "$0")/.."
 mkdir -p runs/logs
 : "${RULFUSE_DATA_ROOT:?source slurm/env.sh first}"
+set +e
 python -m rulfuse.cli manifest --study "$study"
+status=$?
+set -e
+if [ "$status" -eq 3 ]; then  # the study is not needed (its "requires" is not met): no job
+    echo "$study: nothing submitted; \$RULFUSE_DATA_ROOT/runs/$study/decision.json says why"
+    exit 0
+fi
+[ "$status" -eq 0 ] || exit "$status"
 n=$(( $(wc -l < "$RULFUSE_DATA_ROOT/runs/$study/manifest.tsv") - 1 ))
 # A study with inner fits (gate3) has a fifth manifest column, `inner`: -1 for an outer fit. An
 # inner fit trains for the step its outer fit kept, so the inner tasks wait for the outer array.

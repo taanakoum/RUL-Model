@@ -90,6 +90,18 @@ class Study:
         spec = self.spec.get("inner")
         return None if not spec else {"n": int(spec["n"]), "seed": int(spec.get("seed", 0))}
 
+    def skip_reason(self, runs: Path | None = None) -> str | None:
+        """Why the study is not needed, or None. ``requires`` maps config fields to the values
+        the inherited decisions must have adopted (D31: Gate 2b-fix runs only if F0 won)."""
+        required = self.spec.get("requires") or {}
+        if not required:
+            return None
+        adopted = self.inherited(runs)
+        wrong = {k: adopted.get(k) for k, v in required.items() if adopted.get(k) != v}
+        if not wrong:
+            return None
+        return f"requires {required}, but the inherited decisions adopted {wrong}"
+
     def run_dir(self, runs: Path | None = None) -> Path:
         return (runs or paths.runs_dir()) / self.name
 
@@ -162,7 +174,32 @@ def inner_split(fold: Fold, n: int, seed: int = 0) -> list[tuple[list[str], list
 # ----------------------------------------------------------------------------- manifest
 
 
-def write_manifest(study: Study, units: list[str], runs: Path | None = None) -> Path:
+def write_skipped(study: Study, reason: str, runs: Path | None = None) -> Path:
+    """A study that is not needed: its decision adopts nothing new, so later studies inherit
+    the earlier decisions unchanged."""
+    out = study.run_dir(runs)
+    out.mkdir(parents=True, exist_ok=True)
+    decision = {
+        "complete": True,
+        "skipped": reason,
+        "study": study.name,
+        "new_adoptions": {},
+        "adopted": study.inherited(runs),
+        "validation_only": True,
+    }
+    (out / "decision.json").write_text(json.dumps(decision, indent=1), encoding="utf-8")
+    (out / "REPORT.md").write_text(
+        f"# Study {study.name}\n\nNot run: {reason}.\n", encoding="utf-8"
+    )
+    return out / "decision.json"
+
+
+def write_manifest(study: Study, units: list[str], runs: Path | None = None) -> Path | None:
+    """The study's manifest, or None (and a 'skipped' decision) if it is not needed."""
+    reason = study.skip_reason(runs)
+    if reason:
+        write_skipped(study, reason, runs)
+        return None
     for arm in study.arms:
         study.config(arm, runs)  # fails early on an unknown field or a missing inheritance
     out = study.run_dir(runs)
