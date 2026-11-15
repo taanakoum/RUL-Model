@@ -526,7 +526,7 @@ def write_run_report(
     out.mkdir(parents=True, exist_ok=True)
     progress = arm_progress(store, root, spec)
     _write_csv(_curve_rows([progress]), out / "curves.csv")
-    preds = aggregate.load_predictions(folder, spec.signature())
+    preds = aggregate.load_predictions(folder, spec.signature(), spec.seeds)
     today = today or date.today()
     res: dict = {
         "store": f"{store.dataset}/{store.signature}",

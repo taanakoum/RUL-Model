@@ -402,7 +402,10 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     path = write_manifest(study, store.unit_names, args.runs_root)
     n = sum(1 for _ in path.open(encoding="utf-8")) - 1
     print(f"{path}: {n} tasks ({len(study.arms)} arms; seeds {study.seeds})")
-    print(f"submit: sbatch --array=0-{n - 1}%4 slurm/array.sbatch {args.study}")
+    if study.inner:  # the inner fits need their outer fits first: two dependent arrays
+        print(f"submit with: bash slurm/study.sh {args.study}  (outer array, then inner array)")
+    else:
+        print(f"submit: sbatch --array=0-{n - 1}%4 slurm/array.sbatch {args.study}")
     return 0
 
 
@@ -430,9 +433,28 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
     if not decision.get("complete"):
         print(f"incomplete: {len(decision['missing'])} arm/fold cells missing")
         return 1
+    if decision.get("type") == "calibration":
+        for m, w in decision["mean_winkler"].items():
+            print(
+                f"{m:6s} validation coverage {decision['mean_coverage'][m]:.3f}  Winkler {w:7.1f} s"
+            )
+        print(f"calibration choice: {decision['calibration_choice']}")
+        return 0
     for arm, mae in decision["means"].items():
         print(f"{arm:28s} validation window MAE {mae:7.1f} s")
     print(f"adopted: {decision['adopted']}")
+    return 0
+
+
+def cmd_freeze(args: argparse.Namespace) -> int:
+    from rulfuse.gate3 import freeze
+    from rulfuse.study import Study
+
+    study = Study.load(args.study)
+    out = args.out or paths.REPO_ROOT / "configs" / "final.json"
+    frozen = freeze(study, args.runs_root, out, amended=args.amended)
+    print(f"froze the design after {args.study}: hash {frozen['hash']} -> {out}")
+    print(f"calibration: {frozen['calibration']}")
     return 0
 
 
@@ -581,6 +603,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--study", required=True)
     p.add_argument("--runs-root", type=Path, default=None)
     p.set_defaults(func=cmd_aggregate)
+
+    p = sub.add_parser("freeze", help="RUL-Fuse: write the frozen design after Gate 3 (D15)")
+    p.add_argument("--study", default="gate3")
+    p.add_argument("--out", type=Path, default=None, help="default: configs/final.json")
+    p.add_argument(
+        "--amended",
+        default=None,
+        help="text of a recorded decision that accepts a failed coverage constraint",
+    )
+    p.add_argument("--runs-root", type=Path, default=None)
+    p.set_defaults(func=cmd_freeze)
 
     p = sub.add_parser("sanity", help="RUL-Fuse: the seven Stage-4 sanity checks")
     p.add_argument("--study", default="pilot", help="study whose store, caches and base to use")

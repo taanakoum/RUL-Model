@@ -49,6 +49,7 @@ for manifest in sorted(glob.glob(os.path.join(root, "runs", "*", "manifest.tsv")
         lines = [line for line in f.read().splitlines()[1:] if line.strip()]
     expected = sum(len(line.split("\t")[3].split(",")) for line in lines)
     done = len(glob.glob(os.path.join(study, "*", "fold-*", "seed-*", "DONE")))
+    done += len(glob.glob(os.path.join(study, "*", "fold-*", "inner-*", "seed-*", "DONE")))
     extra = "  decision.json present" if os.path.isfile(os.path.join(study, "decision.json")) else ""
     print(f"  RUL-Fuse study {os.path.basename(study)}: {done}/{expected} fits{extra}")
 

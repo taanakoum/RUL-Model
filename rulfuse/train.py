@@ -66,8 +66,72 @@ def seed_everything(fold_index: int, seed: int) -> np.random.Generator:
     return np.random.default_rng(value)
 
 
+# The version of the code path a fit runs, per fusion family. Bumped when a change alters what
+# a fit of that family computes, so a fit made by older code is neither copied nor taken as
+# finished (B1, audit F01/F03). Fits written before the field existed are version 1.
+#   F0 2: reads only valid, earlier images in padded batches (audit F01, 2026-11-15).
+#   F1 1: unchanged (it has no image-state lookup; tests/test_padded_images.py).
+CODE_VERSION_BY_FUSION = {"F1": 1, "F0": 2}
+CODE_VERSION = max(CODE_VERSION_BY_FUSION.values())
+
+
+class StaleFitError(RuntimeError):
+    """A finished fit or a checkpoint was made by another computation than the one asked for."""
+
+
 def fit_key(config: FitConfig) -> str:
     return stable_hash(config.to_dict())
+
+
+def fit_code_version(config: FitConfig) -> int:
+    return CODE_VERSION_BY_FUSION[config.fusion]
+
+
+def fit_identity(
+    config: FitConfig,
+    fold: Fold,
+    seed: int,
+    train: list[str],
+    heldout: list[str] | None = None,
+    fixed_steps: int | None = None,
+) -> dict:
+    """What a fit computes: configuration, code version, roles, seed and, for an inner fit,
+    the held-out units and the step count (audit F03). The store and encoders are checked by
+    the study (they name the folder's inputs)."""
+    return {
+        "config_key": fit_key(config),
+        "code_version": fit_code_version(config),
+        "test": fold.test,
+        "validation": fold.validation,
+        "train": sorted(train),
+        "seed": int(seed),
+        "heldout": None if heldout is None else sorted(heldout),
+        "fixed_steps": fixed_steps,
+    }
+
+
+def check_finished(out: Path, identity: dict) -> dict:
+    """The selection of a finished fit in ``out`` if it is the fit ``identity`` asks for;
+    raises StaleFitError otherwise (a fit by older code, or another configuration). A fit
+    from before identities were recorded is compared on what its selection holds."""
+    sel = json.loads((Path(out) / "selection.json").read_text(encoding="utf-8"))
+    if "identity" in sel:
+        same = sel["identity"] == identity
+    else:  # written before 2026-11-15: version 1, no inner fits
+        same = (
+            sel.get("config_key") == identity["config_key"]
+            and int(sel.get("code_version", 1)) == identity["code_version"]
+            and sel.get("fold_validation") == identity["validation"]
+            and sel.get("seed") == identity["seed"]
+            and identity["heldout"] is None
+        )
+    if not same:
+        raise StaleFitError(
+            f"{out} holds a finished fit of another computation (configuration or code version "
+            f"{sel.get('code_version', 1)}, now {identity['code_version']}): it is not reused. "
+            "Run the study under a new name, or move the folder away to rerun it."
+        )
+    return sel
 
 
 # ----------------------------------------------------------------------------- loss
@@ -248,14 +312,30 @@ def fit(
     train_units: list[str] | None = None,
     data: FoldData | None = None,
     stop_after_steps: int | None = None,
+    heldout: list[str] | None = None,
+    fixed_steps: int | None = None,
 ) -> dict:
-    """Run (or resume) one fit; returns its summary (``selection.json``)."""
+    """Run (or resume) one fit; returns its summary (``selection.json``).
+
+    ``heldout`` with ``fixed_steps`` makes it an *inner fit* for calibration (§7.2 step 10,
+    §9.2): ``fold.train`` is the inner training set (the outer fit's training tools minus the
+    held-out group), ``fold.test`` is the first held-out unit (it only names the seed and the
+    cross-fit), and the fit trains for exactly ``fixed_steps`` steps, the outer fit's selected
+    step, on the outer fit's learning-rate schedule, with **no evaluation and no selection**:
+    the validation unit is not used at all. It predicts the held-out units only, with role
+    ``heldout``; the real test unit is never built or predicted. With the outer fit's training
+    tools, seed and step count, its weights equal the outer fit's selected weights."""
     out = Path(out_dir)
-    if (out / "DONE").is_file():
-        return json.loads((out / "selection.json").read_text(encoding="utf-8"))
-    out.mkdir(parents=True, exist_ok=True)
-    roles = {fold.test, fold.validation}
+    inner = heldout is not None
+    if inner != (fixed_steps is not None):
+        raise ValueError("an inner fit needs both heldout units and fixed_steps")
     train = list(train_units or fold.train)
+    identity = fit_identity(config, fold, seed, train, heldout, fixed_steps)
+    if (out / "DONE").is_file():
+        return check_finished(out, identity)
+    out.mkdir(parents=True, exist_ok=True)
+    limit_steps = fixed_steps if fixed_steps is not None else 0
+    roles = {fold.test, fold.validation, *(heldout or [])}
     if roles & set(train) or fold.test == fold.validation:
         raise ValueError("test, validation and training units must be disjoint")
     config.save(out / "config.json")
@@ -273,14 +353,23 @@ def fit(
     opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     train_tensors = FoldTensors(data, train, device)
     unit_tensors = {u: FoldTensors(data, [u], device) for u in data.units}
-    val_seq = make_sequence(data.units[fold.validation], None, config.w_far)
+    val_seq = None if inner else make_sequence(data.units[fold.validation], None, config.w_far)
     phase_a = config.phase_a_steps if (config.phase_a and data.has_hi) else 0
     total = phase_a + (config.max_steps - config.phase_a_steps)
     state = FitState()
     snapshots: dict[int, dict] = {}
     ckpt = out / "checkpoint.pt"
     if ckpt.is_file():
-        saved = torch.load(ckpt, map_location=device, weights_only=False)
+        # on the CPU: the random states must stay CPU tensors; load_state_dict moves the weights
+        # and the optimizer state to the parameters' device (audit F05)
+        saved = torch.load(ckpt, map_location="cpu", weights_only=False)
+        if saved.get("identity") != identity:  # another computation's checkpoint (audit F03)
+            log(f"[fit] {ckpt} belongs to another computation: starting afresh")
+            saved = None
+            ckpt.unlink()
+    else:
+        saved = None
+    if saved is not None:
         model.load_state_dict(saved["model"])
         ema.load_state_dict(saved["ema"])
         opt.load_state_dict(saved["opt"])
@@ -288,10 +377,12 @@ def fit(
         snapshots = saved["snapshots"]
         rng.bit_generator.state = saved["np_rng"]
         torch.set_rng_state(saved["torch_rng"])
+        if saved.get("cuda_rng") is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(saved["cuda_rng"])
         log(f"[fit] resumed at step {state.step}")
     model.train()
     stopped = False
-    while state.step < total and not stopped:
+    while state.step < (limit_steps if inner else total) and not stopped:
         state.step += 1
         step = state.step
         phase = "A" if step <= phase_a else "B"
@@ -323,38 +414,40 @@ def fit(
                 row["alpha"] = [float(v) for v in a]
             state.curves.append(row)
         if phase == "B" and b_step % config.eval_every == 0:
-            pred = predict(ema, val_seq, unit_tensors[fold.validation], config, n_ch)
-            train_pred = [
-                predict(
-                    ema,
-                    make_sequence(data.units[u], None, config.w_far),
-                    unit_tensors[u],
-                    config,
-                    n_ch,
+            if not inner:  # an inner fit has no evaluation and no selection
+                assert val_seq is not None  # only an inner fit has none, and it never gets here
+                pred = predict(ema, val_seq, unit_tensors[fold.validation], config, n_ch)
+                train_pred = [
+                    predict(
+                        ema,
+                        make_sequence(data.units[u], None, config.w_far),
+                        unit_tensors[u],
+                        config,
+                        n_ch,
+                    )
+                    for u in train
+                ]
+                score = weighted_mae(pred)
+                k = len(state.evals)
+                state.evals.append(
+                    {
+                        "step": step,
+                        "val_mae_s": score,
+                        "val_window_mae_s": window_mae(pred),
+                        "train_mae_s": float(np.mean([weighted_mae(p) for p in train_pred])),
+                        "coverage90": _coverage(pred, 0.9),
+                    }
                 )
-                for u in train
-            ]
-            score = weighted_mae(pred)
-            k = len(state.evals)
-            state.evals.append(
-                {
-                    "step": step,
-                    "val_mae_s": score,
-                    "val_window_mae_s": window_mae(pred),
-                    "train_mae_s": float(np.mean([weighted_mae(p) for p in train_pred])),
-                    "coverage90": _coverage(pred, 0.9),
-                }
-            )
-            snapshots[k] = _cpu_state(ema)
-            if k >= 2:
-                smoothed = float(np.mean([e["val_mae_s"] for e in state.evals[k - 2 : k + 1]]))
-                if smoothed < state.best_smoothed - 1e-9:
-                    state.best_smoothed, state.best_eval, state.since_best = smoothed, k - 1, 0
-                else:
-                    state.since_best += 1
-                keep = {state.best_eval, k, k - 1}
-                snapshots = {i: s for i, s in snapshots.items() if i in keep}
-                stopped = state.since_best >= config.patience
+                snapshots[k] = _cpu_state(ema)
+                if k >= 2:
+                    smoothed = float(np.mean([e["val_mae_s"] for e in state.evals[k - 2 : k + 1]]))
+                    if smoothed < state.best_smoothed - 1e-9:
+                        state.best_smoothed, state.best_eval, state.since_best = smoothed, k - 1, 0
+                    else:
+                        state.since_best += 1
+                    keep = {state.best_eval, k, k - 1}
+                    snapshots = {i: s for i, s in snapshots.items() if i in keep}
+                    stopped = state.since_best >= config.patience
             model.train()
             torch.save(
                 {
@@ -365,45 +458,69 @@ def fit(
                     "snapshots": snapshots,
                     "np_rng": rng.bit_generator.state,
                     "torch_rng": torch.get_rng_state(),
+                    # dropout and feature noise on the GPU draw from the CUDA generators
+                    "cuda_rng": (
+                        torch.cuda.get_rng_state_all()
+                        if str(device).startswith("cuda") and torch.cuda.is_available()
+                        else None
+                    ),
+                    "identity": identity,
                 },
                 ckpt,
             )
         if stop_after_steps is not None and step >= stop_after_steps:
             return {"interrupted_at": step}
-    if state.best_eval < 0:  # fewer than 3 evaluations
-        scores = [e["val_mae_s"] for e in state.evals]
-        state.best_eval = int(np.argmin(scores)) if scores else -1
-    if state.best_eval >= 0 and state.best_eval in snapshots:
-        ema.load_state_dict(snapshots[state.best_eval])
+    if not inner:
+        if state.best_eval < 0:  # fewer than 3 evaluations
+            scores = [e["val_mae_s"] for e in state.evals]
+            state.best_eval = int(np.argmin(scores)) if scores else -1
+        if state.best_eval >= 0 and state.best_eval in snapshots:
+            ema.load_state_dict(snapshots[state.best_eval])
     selected = ema
     torch.save(selected.state_dict(), out / "model.pt")
     elapsed = time.perf_counter() - t0
     preds = {}
-    for u in [fold.validation, fold.test, *train]:
+    scored = list(heldout) if inner else [fold.validation, fold.test, *train]
+    for u in scored:
         if u in data.units:
             seq = make_sequence(data.units[u], None, config.w_far)
             preds[u] = predict(selected, seq, unit_tensors[u], config, n_ch)
-    roles_map = {fold.validation: "validation", fold.test: "test"}
+    if inner:
+        roles_map = dict.fromkeys(heldout, "heldout")
+    else:
+        roles_map = {fold.validation: "validation", fold.test: "test"}
     write_predictions(out / "predictions.parquet", preds, roles_map, data)
-    from rulfuse.diagnostics import fit_diagnostics
+    if not inner:
+        from rulfuse.diagnostics import fit_diagnostics
 
-    diag = fit_diagnostics(selected, data, fold, train, config, state, preds, unit_tensors, store)
-    (out / "diagnostics.json").write_text(
-        json.dumps(diag, indent=1, default=float), encoding="utf-8"
-    )
+        diag = fit_diagnostics(
+            selected, data, fold, train, config, state, preds, unit_tensors, store
+        )
+        (out / "diagnostics.json").write_text(
+            json.dumps(diag, indent=1, default=float), encoding="utf-8"
+        )
     selection = {
         "fold_test": fold.test,
         "fold_validation": fold.validation,
         "seed": seed,
         "config_key": fit_key(config),
+        "code_version": fit_code_version(config),
+        "identity": identity,
         "selected_eval": state.best_eval,
-        "selected_step": state.evals[state.best_eval]["step"] if state.best_eval >= 0 else None,
+        "selected_step": (
+            state.step
+            if inner
+            else (state.evals[state.best_eval]["step"] if state.best_eval >= 0 else None)
+        ),
         "evaluations": state.evals,
         "steps_run": state.step,
         "seconds": elapsed,
         "parameters": int(sum(p.numel() for p in model.parameters())),
         "device": device,
     }
+    if inner:
+        selection["inner_held_out"] = sorted(heldout)
+        selection["inner_train"] = sorted(train)
     (out / "selection.json").write_text(json.dumps(selection, indent=1), encoding="utf-8")
     (out / "curves.json").write_text(json.dumps(state.curves), encoding="utf-8")
     ckpt.unlink(missing_ok=True)

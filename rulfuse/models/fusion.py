@@ -315,11 +315,15 @@ class RULFuse(nn.Module):
                 last_t.append(last)
             st = torch.stack(states, 1)
             lt = torch.stack(last_t, 1)
-            count = (times[:, None, :] < batch["tau"][:, :, None] - TOL).sum(-1)  # (B, n)
-            idx = (count - 1).clamp_min(0)
+            # the last *valid* image taken before the query time: padded slots (time 0) and
+            # dropped images are not visible, so a padded batch gives what the unit gives alone
+            visible = valid[:, None, :] & (times[:, None, :] < batch["tau"][:, :, None] - TOL)
+            slot = torch.arange(img.shape[1], device=x.device)
+            last_slot = torch.where(visible, slot, torch.full_like(slot, -1)).max(-1).values
+            idx = last_slot.clamp_min(0)  # (B, n)
             read = torch.gather(st, 1, idx[..., None].expand(-1, -1, st.shape[-1]))
             t_img = torch.gather(lt, 1, idx)
-            present_i = (count > 0) & torch.isfinite(t_img) & ~batch["drop_images"][:, None]
+            present_i = (last_slot >= 0) & torch.isfinite(t_img) & ~batch["drop_images"][:, None]
             mu0, sg_i, nu_i = self.i_head(read)
             age = torch.where(present_i, batch["tau"] - t_img, torch.zeros_like(t_img))
             mu_i = (mu0 - age / self.horizon).clamp_min(1e-4)

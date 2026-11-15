@@ -56,13 +56,20 @@ def check_seal(role: str, after_freeze: bool, today: date | None = None) -> None
         )
 
 
-def load_predictions(folder: Path, signature: dict | None = None) -> dict[str, np.ndarray]:
+def load_predictions(
+    folder: Path, signature: dict | None = None, seeds: Sequence[int] | None = None
+) -> dict[str, np.ndarray]:
     """Every fit's predictions under an arm folder; with ``signature`` (an
     ``ArmSpec.signature()``), only the fits whose ``fit.json`` records those settings, so a
-    partly rerun arm never mixes fits made with other settings."""
+    partly rerun arm never mixes fits made with other settings; with ``seeds``, only those
+    seeds' folders (the signature leaves seeds out so single fits can be reused, so a folder
+    may hold seeds the arm did not ask for; audit F07)."""
     import json
 
     files = sorted(folder.glob("fold-*/seed-*/predictions.parquet"))
+    if seeds is not None:
+        wanted = {int(s) for s in seeds}
+        files = [f for f in files if int(f.parent.name.split("-", 1)[1]) in wanted]
     if signature is not None:
         files = [
             f
@@ -125,6 +132,9 @@ def ensemble(predictions: dict[str, np.ndarray], role: str) -> dict[str, np.ndar
     keys, inverse, counts = np.unique(
         np.stack([fold, row], axis=1), axis=0, return_inverse=True, return_counts=True
     )
+    for f in np.unique(keys[:, 0]):  # every member of a fold predicts the same points
+        if len(np.unique(counts[keys[:, 0] == f])) > 1:
+            raise ValueError(f"fold {f}: the seed members do not predict the same points")
     total = np.zeros(len(keys))
     np.add.at(total, inverse.reshape(-1), value)
     first = np.zeros(len(keys), dtype=np.int64)
@@ -161,11 +171,13 @@ def score_arm(
     after_freeze: bool = False,
     today: date | None = None,
     signature: dict | None = None,
+    seeds: Sequence[int] | None = None,
 ) -> dict:
     """Per-unit scores of the arm's seed ensemble on the evaluation grid, the temporal
-    stability over every point, and the summaries (only fits with ``signature``, if given)."""
+    stability over every point, and the summaries (only fits with ``signature`` and of
+    ``seeds``, if given)."""
     check_seal(role, after_freeze, today)
-    combined = ensemble(load_predictions(folder, signature), role)
+    combined = ensemble(load_predictions(folder, signature, seeds), role)
     seg = store.segments
     per_unit = {}
     grid = combined["on_grid"].astype(bool)

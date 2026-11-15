@@ -213,7 +213,23 @@ def _tables(ds: Dataset) -> tuple[list[dict], list[dict], list[dict], dict[str, 
     return recording_rows, segment_rows, image_rows, units
 
 
-def _write(rows: list[dict], path: Path) -> None:
+# The image table's columns: written even when a dataset has no image (audit F06), so the core
+# reads the same columns from every store.
+IMAGE_SCHEMA = pa.schema(
+    [
+        ("unit", pa.string()),
+        ("kind", pa.string()),
+        ("key", pa.string()),
+        ("path", pa.string()),
+        ("available_s", pa.float64()),
+    ]
+)
+
+
+def _write(rows: list[dict], path: Path, empty_schema: pa.Schema | None = None) -> None:
+    if not rows and empty_schema is not None:
+        pq.write_table(empty_schema.empty_table(), path)
+        return
     columns = list(dict.fromkeys(key for row in rows for key in row)) if rows else []
     pq.write_table(pa.table({c: [row.get(c) for row in rows] for c in columns}), path)
 
@@ -236,7 +252,7 @@ def build_segment_store(ds: Dataset, root: str | Path | None = None, force: bool
     recordings, segments, images, units = _tables(ds)
     _write(recordings, tmp / "recordings.parquet")
     _write(segments, tmp / "segments.parquet")
-    _write(images, tmp / "images.parquet")
+    _write(images, tmp / "images.parquet", IMAGE_SCHEMA)
     (tmp / "units.json").write_text(json.dumps(units, indent=1, default=str), encoding="utf-8")
     point = np.array([row["is_prediction_point"] for row in segments], dtype=bool)
     present = np.array([row["signal_present"] for row in segments], dtype=bool)
@@ -276,6 +292,15 @@ def _read(path: Path) -> dict[str, np.ndarray]:
     return {name: table.column(name).to_numpy(zero_copy_only=False) for name in table.column_names}
 
 
+def _with_image_columns(images: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """A store written before IMAGE_SCHEMA with no image has no columns: add them, empty."""
+    for field in IMAGE_SCHEMA:
+        if field.name not in images:
+            dtype = np.float64 if field.name == "available_s" else object
+            images[field.name] = np.zeros(0, dtype=dtype)
+    return images
+
+
 @dataclass
 class SegmentStore:
     root: Path
@@ -298,7 +323,7 @@ class SegmentStore:
             units,
             _read(path / "recordings.parquet"),
             _read(path / "segments.parquet"),
-            _read(path / "images.parquet"),
+            _with_image_columns(_read(path / "images.parquet")),
         )
 
     @property

@@ -1352,3 +1352,44 @@ aggregation was rerun as job 2591420.
 **On Ruche:** if Gate 2b was submitted before D28 (80 tasks), cancel the controls with
 `scancel <array job id>_[50-79]`, then once tasks 0-49 finish run `git pull` and submit the
 aggregation by hand (runbook §15.3).
+
+## 2026-11-15 — Stage 6 code (Gate 3), D29, and the audit findings checked
+
+**Built (not yet run on Ruche).** `configs/studies/gate3.json`; `rulfuse/gate3.py` (out-of-fold
+calibration methods raw/a/b/c, Winkler and coverage per validation tool, reliability, pooled and
+without-thinnest summaries, the Kalman filter under Rule A, the report, `freeze`); inner fits in
+`rulfuse/study.py` (`inner` spec, `inner_split`, one manifest line per outer fit then per inner
+split, B1 copies of inner fits, `outer_selected_step`); `fit(heldout=..., fixed_steps=...)` in
+`rulfuse/train.py`; `rulfuse freeze`; `fit_q` takes a window mask; `slurm/study.sh` submits the
+inner array after the outer one; `slurm/status.sh` counts inner fits.
+
+**Inner fits follow the plan (§7.2 step 10).** My first version early-stopped each inner fit on
+the validation tool; the audit (docs/AUDIT_2026-11-15.md, F02) was right that the plan says
+"the outer fit's selected number of steps (no inner selection)". Now an inner fit trains for the
+step its outer fit kept, with no evaluation, so it is also cheaper and the validation tool stays
+independent. Test: with the outer fit's tools, seed and step it reproduces the outer weights.
+
+**Audit findings verified here.**
+- F01 (F0 reads future photos in padded batches): **reproduced** with the audit's script (60.54 s
+  alone, 64.53 s in a padded batch; 0.41 s change from a photo not yet taken). Cause:
+  `fusion.py` counted the zero-padded image times as earlier images. Fixed (last valid, earlier
+  image); regression tests in `tests/test_padded_images.py`; after the fix the script gives
+  60.54 s both ways and 0 change. Single-unit inference was never affected; training was.
+  **Not yet known: how much it changed Gate 2a/2b (every F0 fit trained through it; F1 does not
+  use the lookup).**
+- F03 (fit reuse ignores encoders and code): reuse now needs the same signal and image encoders
+  and `CODE_VERSION` (2 now; fits from before the field are version 1). A study may list
+  `accept_code_versions` to copy older fits knowingly.
+- F04 (freeze accepted a failed coverage gate): `freeze` refuses unless `--amended` is given.
+- F08 (D28 disclosures): done for Gate 3 (pooled and without-thinnest columns); Gate 2 reports
+  and the final report still need them.
+- F09 (status counter): fixed. Pyright and ruff: clean for the changed files.
+- Not touched: F05 (CUDA resume state), F06 (image-free datasets), F07 (B6 seeds).
+
+**Tests.** `tests/test_gate3.py` and `tests/test_padded_images.py`: inner splits never touch
+the validation or test tool; inner fits predict no test or validation row; the inner fit equals
+the outer weights; the inner task refuses to run before its outer fit; seeds side by side;
+B1 copies of inner fits; aggregation, report, freeze and its refusals; pooled and
+without-thinnest means; reuse refuses other encoders and older code. Real-store dry run: with
+stub decisions `rulfuse manifest --study gate3` writes 50 tasks (10 outer, 40 inner) and all 10
+folds have 4 inner splits of 2 held-out and 6 fitted tools.

@@ -74,7 +74,7 @@ def analyse(
         folder = arm_dir(root, store, spec)
         try:
             validation[spec.name] = aggregate.score_arm(
-                store, folder, "validation", signature=spec.signature()
+                store, folder, "validation", signature=spec.signature(), seeds=spec.seeds
             )
         except FileNotFoundError:  # no fit with these settings yet
             continue
@@ -84,7 +84,7 @@ def analyse(
     aggregate.check_seal("test", after_freeze, today)
     test = {
         spec.name: aggregate.score_arm(
-            store, arm_dir(root, store, spec), "test", True, today, spec.signature()
+            store, arm_dir(root, store, spec), "test", True, today, spec.signature(), spec.seeds
         )
         for spec in arms
     }

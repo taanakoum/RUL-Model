@@ -1,0 +1,261 @@
+{
+  "audit_date": "2026-11-15",
+  "recorded_utc": "2026-11-15T12:53:51.610462+00:00",
+  "base_commit": "9a1536bf52287a26c2b5baf9e4b226169b0c6be6",
+  "working_tree_changed_during_audit": true,
+  "real_test_results_scored": false,
+  "python": "3.11.14 (main, Feb  3 2026, 22:51:29) [MSC v.1944 64 bit (AMD64)]",
+  "python_executable": "D:\\RULModel\\.venv\\Scripts\\python.exe",
+  "versions": {
+    "rulfuse": "0.1.0",
+    "numpy": "2.4.6",
+    "scipy": "1.17.1",
+    "torch": "2.15.0+cpu",
+    "pytest": "9.2.0",
+    "ruff": "0.17.3",
+    "pyright": "1.1.414",
+    "pyarrow": "26.0.1",
+    "omnifuser-reproduction": "1.1.0"
+  },
+  "checks": {
+    "main_pytest": {
+      "command": "python -m pytest -m \"not data and not weights\" --basetemp .audit-tmp -ra",
+      "passed": 227,
+      "deselected": 23,
+      "warnings": 1,
+      "seconds": 649.64
+    },
+    "new_gate3_pytest": {
+      "command": "python -m pytest tests/test_gate3.py --basetemp .audit-gate3-tmp -ra --durations=5",
+      "passed": 6,
+      "warnings": 1,
+      "seconds": 68.98
+    },
+    "warning": "Existing .pytest_cache/v/cache could not be written (WinError 5); test assertions passed.",
+    "ruff": {
+      "violations": 1,
+      "locations": [
+        "rulfuse/uncertainty.py:258 E501"
+      ]
+    },
+    "pyright": {
+      "errors": 4,
+      "warnings": 0,
+      "locations": [
+        "rulfuse/study.py:140:17",
+        "rulfuse/study.py:140:31",
+        "tests/test_gate3.py:153:63",
+        "tests/test_gate3.py:154:72"
+      ]
+    },
+    "dependency_consistency": {
+      "tool": "uv pip check",
+      "packages": 76,
+      "compatible": true
+    },
+    "shell_syntax": {
+      "files": 15,
+      "passed": true
+    },
+    "powershell_syntax": {
+      "files": 1,
+      "parse_errors": 0
+    },
+    "stored_targets_fold_roles_chronology": {
+      "store": "nonastreda/3e357b5a23ff",
+      "passed": true
+    },
+    "coverage_measured": false,
+    "gpu_checked": false,
+    "dependency_vulnerability_scan": false
+  },
+  "reproductions": {
+    "f0_image_padding": {
+      "padded_image_times": [
+        10.0,
+        20.0,
+        0.0,
+        0.0
+      ],
+      "image_present_before_first_photo": true,
+      "single_prediction_at_5s": 60.537296533584595,
+      "batched_prediction_at_5s": 64.53292965888977,
+      "change_at_5s_after_editing_photo_at_20s": 0.4124581813812256
+    },
+    "artifacts": {
+      "reused_despite_different_encoders": true,
+      "coverage_constraint_met": false,
+      "calibration_choice": {
+        "method": "c",
+        "level": 0.9,
+        "filter": false
+      },
+      "freeze_accepted": true
+    },
+    "no_images": {
+      "schema_valid": true,
+      "image_columns": [],
+      "fold_build": "KeyError: 'unit'"
+    },
+    "b6_seeds": {
+      "requested_seeds": [
+        0
+      ],
+      "loaded_seeds": [
+        0,
+        1
+      ],
+      "expected_prediction": 100.0,
+      "actual_prediction": [
+        200.0
+      ]
+    },
+    "cuda_available": false
+  },
+  "source_sha256": {
+    "configs/feature_check_overrides.json": "b6b4db0c9ec7bcebf1cc1af0c5186001bd470ebe31213a8154eda06fd6b59d26",
+    "configs/studies/gate2a.json": "3f4894935ed4049c567f157d5b180b950263a06fbd14bb59a79eb126085b82fa",
+    "configs/studies/gate2b.json": "09946ff9698c7a0433ef70e68c5c5464fb123d9ab436b4c7b66e00ac8c38dfa9",
+    "configs/studies/gate3.json": "ffd7e6e0633bb27679897996222a132f74d3e749b8ae7aee00204a4662b4b1ee",
+    "configs/studies/pilot.json": "0e1f6da68e620341baee4e006e8035f6576a9201671e662fa0c0543f3aea15a4",
+    "docs/audit_reproductions_2026_11_15.py": "dbc556a4c660acc00cfd8baecdcca148c50884bc0f1e1f780f9a509c373d7014",
+    "pyproject.toml": "211d82c1a22759eb0b52deb5264280b8147ffd2fab8afa9c90e26dd1387b3a2d",
+    "rulfuse/__init__.py": "75ea261ac4d3b67075e5ab812797498c1a0aaf1c51e270267f9cd03010a063d5",
+    "rulfuse/adapters/__init__.py": "c97badc6fc8450f2fde10541d5a64916bfcb56b20e1845eb8f84fd9611a91d34",
+    "rulfuse/adapters/nonastreda/__init__.py": "fb27f03cc4885db737e64d0f958170959771761f01e2ab8e46c5e4c898df843a",
+    "rulfuse/adapters/nonastreda/audit.py": "3e9c04b99389a79b30e0fe1fbf6742a19dc3f5df1fd1296e475b0e46817d4c2f",
+    "rulfuse/adapters/nonastreda/dataset.py": "83ddc1a7fb43aa7d70ed94d5ef2c64f4ee5fe334b18f12af1d3129c7e0b47a3b",
+    "rulfuse/adapters/nonastreda/failure.py": "005e820863d205bfc2bd147e128a75ec5acbdd46863ffe90d0f33c465a12f007",
+    "rulfuse/adapters/nonastreda/force_store.py": "371d68f9c77ce260245cbf8ab598d4ccdeda75a55643f829bc280d7d47185e4a",
+    "rulfuse/adapters/nonastreda/images.py": "04859f134fa8b66d53b5a8d68ff2af076d1dbea91a26dafd0d82edd1bceb2065",
+    "rulfuse/adapters/nonastreda/load.py": "7451c4e4f9ec5f91aef1dbf8636cd5546b054bc9d9e231f380ddda744fa8df40",
+    "rulfuse/adapters/nonastreda/timeline.py": "727880758e2af40c1a87f293340a9e758224c32583b772191a19fa47123bd7c2",
+    "rulfuse/adapters/nonastreda/trim.py": "769e87e120683906806a88911b74c0a94e1f32358242315b452b0f49633fe364",
+    "rulfuse/adapters/nonastreda/verify.py": "616373cf78196ce77b7c9395ce22ba898523f84c58e04b6236ca02166e35db97",
+    "rulfuse/adapters/toy.py": "1836dba1ff8cc45400f48e672ba190d45285b4f28fefd542268e06cad22c44e2",
+    "rulfuse/audit.py": "064c3b9d0d9a76b74451d36650ecd22bf57aa490a00d51451e5a05d211307a30",
+    "rulfuse/baselines.py": "bf767d42ee5e12467a2522cd5c76ec03dad021799fbadb34a8277264388816a4",
+    "rulfuse/cli.py": "867051ca5de6140264f39dbabd72414d4ce30b88775f219e6319001ce1bcead5",
+    "rulfuse/config.py": "d32597f4f5ff78ab9f8214dbc108e97645bb641b32948f45372d998d83431aee",
+    "rulfuse/core/__init__.py": "f00c485d1b41b8907a9f4c48871088b29783da3954ebc76374d0648a5e2f2b81",
+    "rulfuse/core/channels.py": "96f3fa1fec33a2874bf1d62d02540934765dd03437b18149054bcc59c6eeb89b",
+    "rulfuse/core/folds.py": "fec974c5dfc44d760249a913681d927637ca9b9077dfdd99ae88b82030b6c7ef",
+    "rulfuse/core/images.py": "7227bf588dae85fd322b0aeaf6b544dc2e8e70d2c28d7062e23c117e3a52169a",
+    "rulfuse/core/normalization.py": "34d49573124f21b4d565dd115f2a60292488f19bfa830567cabbb0ebde14b85a",
+    "rulfuse/core/schema.py": "5a19723ae6e2f86d1f9ac8202730b781af1f429d8ada6abd190de6b7c9382062",
+    "rulfuse/core/segments.py": "8361f1756800209f126a26421ce73e59cfa752b5e8efe7e4c602f2238713b6b0",
+    "rulfuse/core/store.py": "21b792b57cd100b21830a8953a86d90857f9f5a22bb13c1cb5a8ae9116170e0d",
+    "rulfuse/core/targets.py": "f933f0da06949b4d2828a80ba8be0b2d30935135e016d6c0f5bec0cdb09bce94",
+    "rulfuse/degradation.py": "22a37224fb0aecf67a97628393b309c242cbe27b5858b62dcb5def41452ed584",
+    "rulfuse/diagnostics.py": "3fcf1a7fdbeabda291146c9480fbe6c8fab77dc75b7a72151c0282c236747a19",
+    "rulfuse/evaluation.py": "ba4fd2d6c3f8e2ff01d41ac712cb269566185c70a4c1ba5b5706136f534ef0f2",
+    "rulfuse/features/__init__.py": "bc7023cac3693c52eabc1b10f7f1f40d6a85b2f4d82fc8676562a329220740f3",
+    "rulfuse/features/cache.py": "8deb8e7dc653fc7b63687c2c16b184bf6377232da513eb34682c2531f9035334",
+    "rulfuse/features/check.py": "9ca237c5b9f454204a306293354dadd394000727f551d6f9dbc7e36bd5db5ba7",
+    "rulfuse/features/encoders.py": "43b3edb2e867eb0bc6019c42407a2bcd6a70b77796d271c427a5f65fc5baffeb",
+    "rulfuse/features/handcrafted.py": "819cd944fb371d8076fc9db6e1151a8b0a22a490141aa2d148129b7b96b7da24",
+    "rulfuse/features/probe.py": "7e072e41a50f534e2d6c5802d5991b34eb5766845051880ac5a10a37830beea7",
+    "rulfuse/gate3.py": "85e2c421657e2fdc2cb9ab4f40b774c4e9327824b40b5edf300d6cecd7cc6b3a",
+    "rulfuse/hub.py": "cb9433bce44224f6d519012f80e4b5f10c3534b3cb46d58e1e384e340a188759",
+    "rulfuse/inference.py": "0c5bbc50d0c73ee075c2c5ebacd5e1648702baaa62b76a819b9f9ae26295a0ea",
+    "rulfuse/metrics.py": "f27cc7a36f8d3cbd6fd540f90b96517cb1ace5406b62aa0fb7ba866d65610f09",
+    "rulfuse/models/__init__.py": "5c6e3d367bb9c43eddfe175f36165c49d4bb095133a56d6336de8e467c72d864",
+    "rulfuse/models/fusion.py": "4a55b76a5dd58622aae12560e779c5b6683f3f1051db2af64672c40a78024a01",
+    "rulfuse/models/heads.py": "70090c73d764be165b4c80172612921c1bce8ebdb8dcf29e5894eb4f36edb9be",
+    "rulfuse/models/losses.py": "79b01b1da58bae3eafb775b37911fc090d935badf9e38563434ae17d381e64f7",
+    "rulfuse/models/memory.py": "6fabc43d6dfc21f56f81a81a597d1cb636d0d3518253d28ed7ad180abe430cbc",
+    "rulfuse/omnifuser_rul/__init__.py": "3fac4207c22f9905ac6fe3792d641d59a5cd25526804b91bd4a83338fc515903",
+    "rulfuse/omnifuser_rul/aggregate.py": "e5f530d58b81a9c26b0160caf09a44c16ed16b53d62ff61e1242cd2e4fe17268",
+    "rulfuse/omnifuser_rul/data.py": "8bec4974d69a8f6c3aa62adcdae6508502a667d73a184141902c1758d816323f",
+    "rulfuse/omnifuser_rul/model.py": "2fa6740b3d3078f22d8650a29008683f5db21759278aabd37aa02c36e52a19e4",
+    "rulfuse/omnifuser_rul/report.py": "08dca867e348641a1d1b1b1c698a0ee8359a894b2fac1d56e9bd27cde16be246",
+    "rulfuse/omnifuser_rul/run_report.py": "e11e123567c5aef3ff0a5f5d1e460d396ec1c2d95c4e107ba30f5dc2b4293f30",
+    "rulfuse/omnifuser_rul/study.py": "f85546bfdbc7b94aef8be2d76273625c9d1fa4991371f1c3a8284f3e521feb08",
+    "rulfuse/omnifuser_rul/train.py": "36d2b5452bc1d4f161416beac403a09d7af9ae15b2879aea3c82522b5f9a72de",
+    "rulfuse/paths.py": "d2e4cffbbcbee4e3cb6c1013608447a3abf53833e339901a480e7a09afdab733",
+    "rulfuse/resources.py": "86a336211e5b1344f5936607a86db347a936ed53389824c4db7fb9db5666187e",
+    "rulfuse/sanity.py": "7c478d7e963a22526bbf9b9322e67b53eb366a18b08d07e54770144b676c6586",
+    "rulfuse/sequences.py": "a7712efe8d5e7d1d4938cd9f1b708c05f032fe08610109499d6466ba7e6c6788",
+    "rulfuse/stats.py": "bd0d360462da4530c7e195fd89974093983fe1bb538372f8dba6143036598339",
+    "rulfuse/study.py": "96477869d454595c3acc56be2753ae8e1df2a9444d06a7b681307755611bac62",
+    "rulfuse/tokens.py": "dc578ab46793c630c43c93277a7ff8023301d11619144358531c141b439c06f8",
+    "rulfuse/train.py": "45367f632bd90ba9bc5041c82cb0bdcda07a9e0696bd8f9b83007ea0e5c78a06",
+    "rulfuse/uncertainty.py": "baf6f8cfaac7c2bc60c66a5330701416428e20487b64411c7f38d0597d759177",
+    "scripts/eda_rul.py": "79cbb9f2c1f4f30fd3bd14e8ca4470b3f1b7bb0b8f4797f74b1274f2a051c935",
+    "scripts/end_to_end_trace.py": "ffb70ca08bb1ea92c8b6bad93a6de1f7434eefa857c2f36b3bd65074f0f6ac08",
+    "scripts/feature_baselines.py": "7722530700fa693dd55e81f3deedac40046f5d9ea4abee915c9ff4f0f866c6b6",
+    "scripts/pack_for_ruche.ps1": "2efdede82142c1efb47751664cd2b5b13ad71170574ba10e83e698a291af9fe1",
+    "scripts/validate_stage2.py": "fcd93b8d27b9defe15a532a4f4789b8c70dcf09ca8cbf83245d5d5bb10b3f95f",
+    "slurm/array.sbatch": "f17149c03374b6a45e089fa05fefa90909ae2e1c75931404592f764e00ad0307",
+    "slurm/bad_nodes.txt": "fddae82a8217f7dc553aec94f22ccb9c10985a70a72a9a844b615990d4eb988f",
+    "slurm/chain.sh": "9241a2b72e7ccdb9e0cfcdc5741dda1dd226ae08cbd2b8d7444d4ca5dd17231b",
+    "slurm/checks.sbatch": "1a9cca4a0b1bdb281d04cd4da50aea9ecbdd925efeee5be18024a5c7d807ea06",
+    "slurm/cpu.sbatch": "80855d9d0b34d122cec57e41720d94212f6a1cb184492a49ef85f9ad8a75f7a7",
+    "slurm/env.sh": "61913ddf4ff1e383c2af9fb0788127fc3995c03c22cd4b2adceec1100e5c180d",
+    "slurm/exclude.sh": "a7dc8f29489df32f3500ab375611d52c880caa8b174c64376a4fd2e0574ca60a",
+    "slurm/features.sh": "de6413b13960c244fd8ff58e08a601a90c4295bf52428acd2f0b38a626bea1a2",
+    "slurm/job.sbatch": "7fb2ffdc140f2fb15d27b193cf638d4ab266d8464a7160b8db5265283b96229e",
+    "slurm/omnifuser_results.sh": "23522142fcbbd6f756e30f8f5ded82246ac93462c73ab277614761754f24d03f",
+    "slurm/omnifuser_rul.sh": "88e32d255de4841f68f5e691b2bfe4f90a33b31cae722d733a58bda4aa00960f",
+    "slurm/prefetch_weights.sh": "06c6d4f6767632681578d02c7d8e5d5fe16eeb337fd0653f449d5fb5da4cb37e",
+    "slurm/stage3.sh": "e86415aad7c9396e3542f9be1b9649820572bc297fe8e2e6d01786257d0e8076",
+    "slurm/stage4.sh": "918d1230d76092f42a13d1b8b59975e00c75ff736b83fb677055e749312d0725",
+    "slurm/status.sh": "dbe1f4aef21abec3ec9fb2d326682a00365963b1be8016d934f829f4a43b8995",
+    "slurm/study.sh": "95f344af1481d1255f7c321ed230417653d6807246e815ca0b8ef81ed10949cf",
+    "tests/conftest.py": "3999c775e8c1dcdb1fc41ef26bf08336041eb0921348328ddf243fb78909542e",
+    "tests/helpers.py": "ad0f57134b6d3365307ae6cd44b9ca5c3a2d603c9239730332108e2ae65d0766",
+    "tests/test_audit.py": "c5284a0d285b2bc7603eeff205f5ed566488512f06a7895cc688b9496195d65b",
+    "tests/test_baselines.py": "94ab44b8938487d86c04373636d98e2193add128c4b8f2b5469059d8dbbd106f",
+    "tests/test_cache.py": "803a2cddfaaab6f02e3249c2a716294c8a451c9335c993859bf4990dfb122d4a",
+    "tests/test_causality.py": "2988f8c0f2936cf65e8df6b4d4bb4061577ff2a992e293abd85e5c40419287b6",
+    "tests/test_channels.py": "c7d850dd1c12c470f90543a37de139ddab0aa9cf95209fcf41e4662501a6e145",
+    "tests/test_degradation.py": "b2c9158b036d30537c75201f72c1bc975f105e2a468c62b837a375e888a70445",
+    "tests/test_encoders.py": "770ce05fbf34192fb42ad99958e68faa70943978817e861ecbbe62f18a316340",
+    "tests/test_evaluation.py": "d62121a3d301a7192cf439a18ca568b3cd85fa8e82d7313be0c803e50a549ae7",
+    "tests/test_failure.py": "1a42f1116d523501971ee0ecb516104ba7052267d4d94e3379d7da17939bacef",
+    "tests/test_feature_overrides.py": "3767cf0e770a192354f730b077f200ef3d00a40bcca37d5bd95ce714536bd97b",
+    "tests/test_folds.py": "f281861d76fc2484efd0efbeddcecc2bd6d9adb0f7718930ed9c5b8a19b28163",
+    "tests/test_gate3.py": "195e712452ea621b01f3827b5c8f7c92f71d4164b53acf0ba7d06489fe5af765",
+    "tests/test_images.py": "7dd2b6153af21ed7ed55a21f7c0b0c48ebb5d4d29744f4353c1b070dce7fc274",
+    "tests/test_inference.py": "29ee0f232d688ca14a7b0360c653b28802d99c47d7caccf9ddc9f7b4d174de4a",
+    "tests/test_loader.py": "f806e90453f0d1ba03ab4a5abde0572f031048cc14276819b62c25bdc0b023a7",
+    "tests/test_metrics.py": "eed7fdf1c10351a510da04f06731cc9e67de540e3c39bad5b09aa6e9b476940e",
+    "tests/test_models.py": "b9ddc18fe2cf39bcefbfc3d88ae63a0ce8489ad48a745609d6b37faf3b8ba9a5",
+    "tests/test_normalization.py": "cb0c316baf67ca45989ec2a22411da57637f0a0e5f8d656008114917efb1a666",
+    "tests/test_omnifuser_rul.py": "70ba944eef1d3aa8681bedadb68925a1bbc19707c657fbff9e4502c1dde89a00",
+    "tests/test_probe.py": "aa52327082900e3a964ccbc977ebbc56dbb9fa260ee581e960e4444a78d48033",
+    "tests/test_schema.py": "8beed41eaa2edb12e15c1ed7fb93020a9964a8b9a73ccbdb2894394a14ac54dd",
+    "tests/test_segments.py": "cec582dbc49735d88c4098d80a516b115a8de4896a11fd496387caf5c5754680",
+    "tests/test_stats.py": "c851140c57d8bc619a64ffab3b77a3c473a844dd6a6573967443722d24a1cb57",
+    "tests/test_store.py": "3db51c1adef3c3b68eb4dced6a0abb622847948b2855ad6a6aca6426448016ce",
+    "tests/test_targets.py": "deba9d0814472a9adfb67dc5c43acbb95f876cbafa58f9174fb13431105a0cf3",
+    "tests/test_timeline.py": "31cd2b0be41cbe1eeeb6bb57d57e30d1280b743f48594271d6852a3b34d94314",
+    "tests/test_tokens.py": "22c6cd41dbd79cd2d01d6bc857f31c59991a38f7376a81e64c8d5aa1d4671cd4",
+    "tests/test_training.py": "424d63298eacab87e406e50c37435b791ff0cc364a84eb07cf88b551b180b498",
+    "tests/test_transfer_contract.py": "e6ce26c71e174823fafa3f19b49eee7bd7e6232c23d576eba660963163b58736",
+    "tests/test_trim.py": "6d932dfefedc17ee43cac2fef54e73a504647000b4dcf29f883fc83a680c927f",
+    "tests/test_uncertainty.py": "b0badbd274f8bca99b7807e686a98b1824191fac07e5c97f665ea81b29a96ac7",
+    "tests/toy_engine.py": "f35169583df41b657ff46a315d3f7cf4c09f89eb7514316c7e2f5decfdc4bd60"
+  },
+  "severity_assessment": {
+    "scale": "1-10 research and engineering severity: 1-3 low, 4-6 medium, 7-9 high, 10 critical",
+    "basis": [
+      "scientific validity",
+      "silent result corruption",
+      "breadth of exposure",
+      "recovery cost"
+    ],
+    "judgment_based": true,
+    "scores": {
+      "F01": 9,
+      "F02": 8,
+      "F03": 8,
+      "F04": 8,
+      "F05": 6,
+      "F06": 5,
+      "F07": 6,
+      "F08": 4,
+      "F09": 3
+    }
+  }
+}

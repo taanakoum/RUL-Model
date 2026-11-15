@@ -247,7 +247,7 @@ def kalman_rul(
 
 
 def fit_q(
-    units: Sequence[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+    units: Sequence[tuple],
     grid: np.ndarray | None = None,
     *,
     horizon_s: float,
@@ -255,13 +255,20 @@ def fit_q(
 ) -> float:
     """Choose q from a log grid (default np.logspace(-3, 3, 25), s^2/s) minimising the mean over
     units of the MAE of the filtered mean against y. `units` are (tau, y, mu, var) tuples of
-    out-of-fold predictions, each in time order (§9.3). Ties go to the smallest q."""
+    out-of-fold predictions, each in time order (§9.3); an optional fifth element is a boolean
+    mask of the scored points (the window): the filter still runs on all of them. Ties go to
+    the smallest q.
+    """
     qs = np.logspace(-3, 3, 25) if grid is None else np.asarray(grid, float)
     scores = [
         np.mean(
             [
-                np.mean(np.abs(kalman_rul(tau, mu, var, float(q), horizon_s, cap_margin_s)[0] - y))
-                for tau, y, mu, var in units
+                np.mean(
+                    np.abs(
+                        kalman_rul(u[0], u[2], u[3], float(q), horizon_s, cap_margin_s)[0] - u[1]
+                    )[u[4] if len(u) > 4 else slice(None)]
+                )
+                for u in units
             ]
         )
         for q in qs

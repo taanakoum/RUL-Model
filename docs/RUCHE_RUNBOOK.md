@@ -828,8 +828,11 @@ the copied default), run:
 
 ```bash
 for f in "$RULFUSE_DATA_ROOT"/runs/gate2b/{no-trajectory-aug,no-phase-a,tokens-relative,tokens-absolute}/fold-*/seed-*/selection.json; do [ -f "$f" ] && python -c "import json,sys;print(sys.argv[1], round(json.load(open(sys.argv[1]))['seconds']/60,1),'min')" "$f"; done
-sacct -j <gate2b array job id> --format=JobID,Elapsed,State,NodeList
+sacct -u "$USER" -X --name=gate2b -S now-3days --format=JobID%18,Elapsed,State,NodeList
 ```
+
+(`--name` finds the array without its job id; `-X` hides the job steps.) A task's time is
+its slowest seed, since the seeds run side by side.
 
 If a trained task's `Elapsed` exceeds 2:00:00, tell Claude: every later study
 then switches to seed 0 only (D27 fallback).
@@ -889,6 +892,59 @@ every fit folder of a small study as well, use `scp -r "${Ruche}:$R/pilot" D:\RU
 Then record in `PROJECT_LOG.md`: the job IDs, the commit, the time per fit, and the
 decision of each study (`decision.json` → `adopted`). You commit the log and the study
 results yourself.
+
+### 15.6 Stage 6: Gate 3 (calibration, the causal filter, the freeze)
+
+Run it after Gate 2b's `decision.json` exists (the manifest fails with a clear message
+otherwise).
+
+**Read this first (audit F01, 2026-11-15).** F0 trained through a bug that let padded batches
+read photos not yet taken (fixed in the code; see PROJECT_LOG.md). The fix bumps
+`CODE_VERSION`, so Gate 3 will **not** copy Gate 2b's earlier outer fits: it trains the 10
+outer folds again (3 seeds, about 94 min each task) unless `gate3.json` lists
+`"accept_code_versions": [1]`. Do not submit Gate 3 until we have decided together what the
+Gate 2a/2b results are worth.
+
+```bash
+cd "$WORKDIR/RUL-Model" && git pull && source slurm/env.sh
+bash slurm/study.sh gate3
+```
+
+It submits two arrays and an aggregation: tasks 0-9 are the outer fits (copied from an
+earlier study where the configuration, encoders and code version match, otherwise trained),
+and tasks 10-49 are the inner fits, 4 per fold, one split per task, 3 seeds side by side. An
+inner fit trains for exactly the step its outer fit kept, with no evaluation, so the inner
+array waits for the outer one (`--dependency=afterok`). Estimate: the inner tasks about
+25-30 GPU-h in all.
+
+Check the speed on the first inner task:
+
+```bash
+for f in "$RULFUSE_DATA_ROOT"/runs/gate3/design/fold-*/inner-0/seed-*/selection.json; do [ -f "$f" ] && python -c "import json,sys;print(sys.argv[1], round(json.load(open(sys.argv[1]))['seconds']/60,1),'min')" "$f"; done
+sacct -u "$USER" -X --name=gate3,gate3-inner -S now-3days --format=JobID%18,JobName%14,Elapsed,State,NodeList
+```
+
+A task over 2 h means the inner fits are slower than estimated: tell me before it ends.
+
+When the aggregation finishes:
+
+```bash
+cat "$RULFUSE_DATA_ROOT/runs/gate3/REPORT.md"
+```
+
+Send it to me. It lists the coverage and Winkler score of each calibration method (per tool,
+pooled by points, and without the tool with the fewest points), the reliability table and the
+filter's result. `freeze` refuses if no candidate has mean validation coverage in
+[0.85, 0.95]; then we decide what to do before anything is frozen. Once the decision is
+agreed:
+
+```bash
+sbatch --job-name=freeze slurm/cpu.sbatch python -m rulfuse.cli freeze --study gate3
+```
+
+This writes `configs/final.json` (the design, the calibration choice, the hash) inside the
+repository on Ruche: copy it home or commit it from Ruche, then you commit it (D15: after this,
+nothing about the model changes before the test scores are read).
 
 ## 16. Troubleshooting
 
@@ -969,6 +1025,7 @@ rulfuse extract-features --kind signal --encoder mantis8m --device cuda --limit 
 | Time per fit (sets J5-J6 limits) | `grep '"seconds"' "$RULFUSE_DATA_ROOT"/runs/pilot/F1-default/fold-T1/seed-*/selection.json` |
 | Gate 2a (J5), then read `$RULFUSE_DATA_ROOT/runs/gate2a/REPORT.md` | `bash slurm/study.sh gate2a` |
 | Gate 2b (J6), after Gate 2a's decision | `git pull` (only now: Gate 2a ran the earlier code), then `bash slurm/study.sh gate2b` |
+| Gate 3 (J8), after Gate 2b's decision | `git pull`, then `bash slurm/study.sh gate3`; read `$RULFUSE_DATA_ROOT/runs/gate3/REPORT.md` (§15.6) |
 | Gate 2b submitted before D28 (80 tasks): cancel the controls | `scancel <array job id>_[50-79]`, then after tasks 0-49 finish: `git pull` and `sbatch --job-name=gate2b-aggregate slurm/cpu.sbatch python -m rulfuse.cli aggregate --study gate2b` (§15.3) |
 | Finish an interrupted study | the same `bash slurm/study.sh STUDY` (skips `DONE` fits, resumes the rest) |
 | Aggregate a study alone | `sbatch slurm/cpu.sbatch python -m rulfuse.cli aggregate --study STUDY` |

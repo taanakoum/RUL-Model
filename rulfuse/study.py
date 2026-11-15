@@ -34,7 +34,12 @@ scoring belongs to the final study after the freeze (Stage 7), not here.
   against the arm without it. The component stays only if it earns its place. Token modes
   are peers under Rule B. Controls are reported only;
 * ``one_factor`` (sweep): each variant against the default under Rule A. Adopted variants
-  are combined; if two values of one factor pass, the better one is taken.
+  are combined; if two values of one factor pass, the better one is taken;
+* ``calibration`` (Gate 3, :mod:`rulfuse.gate3`): calibration method by Winkler score under a
+  coverage band (Rule B), then the causal filter (Rule A). The study has an ``inner`` spec
+  (``{"n": 4, "seed": 0}``): besides each outer fit, every fold has ``n`` *inner fits*, each
+  holding out a group of the training units (§7.2 step 10). Their held-out predictions are
+  the out-of-fold data the calibration is fitted on.
 """
 
 from __future__ import annotations
@@ -79,6 +84,12 @@ class Study:
         otherwise the study's seeds."""
         return list(self.spec.get("arm_seeds", {}).get(arm, self.seeds))
 
+    @property
+    def inner(self) -> dict | None:
+        """The inner-fit spec (``n`` groups, split ``seed``), or None for a study without."""
+        spec = self.spec.get("inner")
+        return None if not spec else {"n": int(spec["n"]), "seed": int(spec.get("seed", 0))}
+
     def run_dir(self, runs: Path | None = None) -> Path:
         return (runs or paths.runs_dir()) / self.name
 
@@ -116,6 +127,38 @@ def fit_dir(study_dir: Path, arm: str, fold: Fold, seed: int) -> Path:
     return study_dir / arm / f"fold-{fold.test}" / f"seed-{seed}"
 
 
+def inner_fit_dir(study_dir: Path, arm: str, fold: Fold, k: int, seed: int) -> Path:
+    return study_dir / arm / f"fold-{fold.test}" / f"inner-{k}" / f"seed-{seed}"
+
+
+def outer_selected_step(
+    study: Study, arm: str, fold: Fold, seed: int, runs: Path | None = None
+) -> int:
+    """The step the outer fit kept: an inner fit trains for exactly that many (§7.2 step 10).
+    Fails if the outer fit is not finished: inner tasks must run after the outer ones."""
+    folder = fit_dir(study.run_dir(runs), arm, fold, seed)
+    if not (folder / "DONE").is_file():
+        raise RuntimeError(
+            f"{folder}: the outer fit is not finished; an inner fit needs its selected step "
+            "(run the outer tasks first, then resubmit)"
+        )
+    step = json.loads((folder / "selection.json").read_text(encoding="utf-8"))["selected_step"]
+    if not step:
+        raise RuntimeError(f"{folder}: the outer fit kept no step")
+    return int(step)
+
+
+def inner_split(fold: Fold, n: int, seed: int = 0) -> list[tuple[list[str], list[str]]]:
+    """The ``n`` inner splits of a fold's training units: [(held_out, fit_units), ...]. Neither
+    the validation nor the test unit is ever in them."""
+    from rulfuse.uncertainty import inner_folds
+
+    return [
+        (sorted(map(str, held)), sorted(map(str, fit_units)))
+        for held, fit_units in inner_folds(fold.train, n, seed)
+    ]
+
+
 # ----------------------------------------------------------------------------- manifest
 
 
@@ -128,12 +171,17 @@ def write_manifest(study: Study, units: list[str], runs: Path | None = None) -> 
     folds = study_folds(study, units)
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, delimiter="\t")
-        w.writerow(["task", "arm", "fold_test", "seeds"])
+        inner = study.inner
+        w.writerow(["task", "arm", "fold_test", "seeds"] + (["inner"] if inner else []))
         task = 0
-        for arm in study.arms:
-            for fold in folds:
-                w.writerow([task, arm, fold.test, ",".join(map(str, study.arm_seeds(arm)))])
-                task += 1
+        # outer fits first (often copied, B1), then the inner fits: one task each, so a task
+        # (the seeds side by side, A1) stays within the 4 h limit
+        for k in [-1] + (list(range(inner["n"])) if inner else []):
+            for arm in study.arms:
+                for fold in folds:
+                    row = [task, arm, fold.test, ",".join(map(str, study.arm_seeds(arm)))]
+                    w.writerow(row + ([k] if inner else []))
+                    task += 1
     (out / "study.json").write_text(json.dumps(study.spec, indent=1), encoding="utf-8")
     return path
 
@@ -143,25 +191,64 @@ def read_manifest(path: Path) -> list[dict]:
         return list(csv.DictReader(f, delimiter="\t"))
 
 
+def same_computation(info: dict, identity: dict, accept_versions: tuple[int, ...] = ()) -> bool:
+    """Whether a fit's ``selection.json`` (``info``) is the computation ``identity`` describes
+    (:func:`rulfuse.train.fit_identity`). A code version listed in ``accept_versions`` passes
+    for the current one. A fit from before identities were recorded (version 1, outer only)
+    is compared on its configuration, validation unit and seed."""
+    version = int(info.get("code_version", 1))
+    if version != identity["code_version"] and version not in accept_versions:
+        return False
+    if "identity" in info:
+        drop = {"code_version"}
+        mine = {k: v for k, v in info["identity"].items() if k not in drop}
+        return mine == {k: v for k, v in identity.items() if k not in drop}
+    return (
+        identity["heldout"] is None
+        and info.get("config_key") == identity["config_key"]
+        and info.get("fold_validation") == identity["validation"]
+        and info.get("seed") == identity["seed"]
+    )
+
+
 def find_identical_fit(
-    runs: Path, store_name: str, config_key: str, fold: Fold, seed: int, target: Path
+    runs: Path,
+    store_name: str,
+    identity: dict,
+    fold_test: str,
+    target: Path,
+    encoders: tuple[str, str] | None = None,
+    accept_versions: tuple[int, ...] = (),
 ) -> Path | None:
-    """A finished fit of any study with the same store, configuration, fold and seed (B1):
-    fits are deterministic, so it is the fit this task would make."""
-    for selection in sorted(runs.glob(f"*/*/fold-{fold.test}/seed-{seed}/selection.json")):
+    """A finished fit of any study that is the computation this task would make (B1): fits
+    are deterministic. The source must have the same store and encoders (``encoders`` =
+    signal, image) and the same identity (configuration, code version, roles, seed and, for an
+    inner fit, held-out units and step count; :func:`same_computation`). Fits made by older
+    code are copied only if the study lists their version in ``accept_code_versions``; an
+    outer fit never matches an inner one (audit F03)."""
+    inner = identity["heldout"] is not None
+    sub = "inner-*/" if inner else ""
+    up = 3 if inner else 2
+    pattern = f"*/*/fold-{fold_test}/{sub}seed-{identity['seed']}/selection.json"
+    for selection in sorted(runs.glob(pattern)):
         folder = selection.parent
         if folder.resolve() == target.resolve() or not (folder / "DONE").is_file():
             continue
         if (folder / "reused_from.txt").is_file():
             continue  # copy from originals only
-        spec_path = folder.parents[2] / "study.json"
+        spec_path = folder.parents[up] / "study.json"
         if not spec_path.is_file():
             continue
-        if json.loads(spec_path.read_text(encoding="utf-8")).get("store") != store_name:
+        source_spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        if source_spec.get("store") != store_name:
+            continue
+        if encoders is not None and (
+            source_spec.get("signal_encoder"),
+            source_spec.get("image_encoder"),
+        ) != tuple(encoders):
             continue
         info = json.loads(selection.read_text(encoding="utf-8"))
-        same_roles = info.get("fold_validation") == fold.validation
-        if info.get("config_key") == config_key and same_roles and info.get("seed") == seed:
+        if same_computation(info, identity, accept_versions):
             return folder
     return None
 
@@ -212,7 +299,7 @@ def run_task(
     """
     from rulfuse.features.cache import ImageFeatures, SignalFeatures, find_features
     from rulfuse.tokens import build_fold_data
-    from rulfuse.train import fit
+    from rulfuse.train import StaleFitError, fit, fit_identity
 
     rows = read_manifest(study.run_dir(runs) / "manifest.tsv")
     row = rows[task]
@@ -220,6 +307,65 @@ def run_task(
     folds = {f.test: f for f in leave_one_unit_out(store.unit_names)}
     fold = folds[row["fold_test"]]
     config = study.config(row["arm"], runs)
+    inner_k = int(row.get("inner", -1))
+    held: list[str] | None = None
+    work = fold  # the fold the fit is built on: for an inner fit, a pseudo-fold whose training
+    data_units: list[str] | None = None  # set lacks the held-out units and whose data lacks
+    if inner_k >= 0:  # the real test unit
+        spec = study.inner
+        if spec is None:
+            raise ValueError(f"task {task} is an inner fit but the study has no inner spec")
+        held, fit_units = inner_split(fold, **spec)[inner_k]
+        work = Fold(held[0], fold.validation, tuple(fit_units))
+        data_units = [*fit_units, *held]  # not the validation tool: an inner fit never uses it
+
+    def target_of(seed: int) -> Path:
+        if inner_k >= 0:
+            return inner_fit_dir(study.run_dir(runs), row["arm"], fold, inner_k, seed)
+        return fit_dir(study.run_dir(runs), row["arm"], fold, seed)
+
+    runs_root = runs or paths.runs_dir()
+    wanted = [int(s) for s in row["seeds"].split(",")]
+    if seeds is not None:
+        wanted = [s for s in wanted if s in seeds]
+    pending = []
+    steps: dict[int, int] = {}
+    accept = tuple(int(v) for v in study.spec.get("accept_code_versions", []))
+    for seed in wanted:
+        target = target_of(seed)
+        if inner_k >= 0:
+            steps[seed] = outer_selected_step(study, row["arm"], fold, seed, runs)
+        identity = fit_identity(config, work, seed, list(work.train), held, steps.get(seed))
+        if (target / "DONE").is_file():
+            # a finished fit is skipped only if it is this computation (audit F03)
+            info = json.loads((target / "selection.json").read_text(encoding="utf-8"))
+            if not same_computation(info, identity, accept):
+                raise StaleFitError(
+                    f"{target} holds a finished fit of another computation (configuration or "
+                    f"code version {info.get('code_version', 1)}, now "
+                    f"{identity['code_version']}); run the study under a new name, or move the "
+                    "folder away to rerun it"
+                )
+            continue
+        source = find_identical_fit(
+            runs_root,
+            study.spec["store"],
+            identity,
+            fold.test,
+            target,
+            (study.spec.get("signal_encoder", ""), study.spec.get("image_encoder", "")),
+            accept,
+        )
+        if source is not None:
+            log(f"[task {task}] seed {seed}: identical fit found, copied from {source}")
+            reuse_fit(source, target)
+            continue
+        pending.append(seed)
+    if not pending:  # everything finished or copied: no features, no tokens (B1)
+        return [
+            json.loads((target_of(s) / "selection.json").read_text(encoding="utf-8"))
+            for s in wanted
+        ]
     features_root = Path(study.spec["features_root"]) if study.spec.get("features_root") else None
     if signal_features is None and config.uses_signal:
         signal_features = SignalFeatures.open(
@@ -229,25 +375,7 @@ def run_task(
         image_features = ImageFeatures.open(
             find_features(store, "image", study.spec["image_encoder"], features_root)
         )
-    from rulfuse.train import fit_key
-
-    runs_root = runs or paths.runs_dir()
-    wanted = [int(s) for s in row["seeds"].split(",")]
-    if seeds is not None:
-        wanted = [s for s in wanted if s in seeds]
-    pending = []
-    key = fit_key(config)
-    for seed in wanted:
-        target = fit_dir(study.run_dir(runs), row["arm"], fold, seed)
-        if (target / "DONE").is_file():
-            continue
-        source = find_identical_fit(runs_root, study.spec["store"], key, fold, seed, target)
-        if source is not None:
-            log(f"[task {task}] seed {seed}: identical fit found, copied from {source}")
-            reuse_fit(source, target)
-            continue
-        pending.append(seed)
-    data = build_fold_data(store, signal_features, image_features, fold, config)
+    data = build_fold_data(store, signal_features, image_features, work, config, data_units)
     if parallel and len(pending) > 1:
         import multiprocessing as mp
 
@@ -269,7 +397,7 @@ def run_task(
         pending = []
     out = []
     for seed in wanted:
-        target = fit_dir(study.run_dir(runs), row["arm"], fold, seed)
+        target = target_of(seed)
         if seed not in pending:
             out.append(json.loads((target / "selection.json").read_text(encoding="utf-8")))
             continue
@@ -278,13 +406,15 @@ def run_task(
                 store,
                 signal_features,
                 image_features,
-                fold,
+                work,
                 seed,
                 config,
                 target,
                 device,
                 log,
                 data=data,
+                heldout=held,
+                fixed_steps=steps.get(seed),
             )
         )
     return out
@@ -356,10 +486,14 @@ def score_arm(study: Study, arm: str, store: SegmentStore, runs: Path | None = N
         )
         rul = ens["rul_s"][keep]
         warnings = []
+        versions = set()
         for seed in study.arm_seeds(arm):
-            diag = fit_dir(study.run_dir(runs), arm, fold, seed) / "diagnostics.json"
+            folder = fit_dir(study.run_dir(runs), arm, fold, seed)
+            diag = folder / "diagnostics.json"
             if diag.is_file():
                 warnings += json.loads(diag.read_text(encoding="utf-8"))["warnings"]
+            sel = json.loads((folder / "selection.json").read_text(encoding="utf-8"))
+            versions.add(int(sel.get("code_version", 1)))
         rows.append(
             {
                 "arm": arm,
@@ -374,6 +508,7 @@ def score_arm(study: Study, arm: str, store: SegmentStore, runs: Path | None = N
                 "b0_window_mae_s": float(np.mean(np.abs(horizon / 2 - rul))),
                 "seed_sd_s": float(np.std(ens["seed_window_mae"])),
                 "warnings": len(warnings),
+                "code_versions": ",".join(map(str, sorted(versions))),
             }
         )
     return rows
@@ -384,6 +519,32 @@ def _per_unit(rows: list[dict], arm: str) -> np.ndarray:
         (r for r in rows if r["arm"] == arm and r.get("done")), key=lambda r: r["validation"]
     )
     return np.array([r["window_mae_s"] for r in mine])
+
+
+def disclosures(rows: list[dict], arms: list[str]) -> dict:
+    """Reported beside the per-tool means, never used by a rule (D28, audit F08): the MAE over
+    all window points pooled (each tool weighs by its points) and the per-tool mean without
+    the validation tool with the fewest window points (T4 on Nonastreda: 20 points)."""
+    pooled, without = {}, {}
+    thin_tool, thin_points = None, None
+    for a in arms:
+        mine = sorted(
+            (r for r in rows if r["arm"] == a and r.get("done")), key=lambda r: r["validation"]
+        )
+        if not mine or any("points" not in r for r in mine):
+            continue
+        pts = np.array([r["points"] for r in mine], float)
+        mae = np.array([r["window_mae_s"] for r in mine])
+        pooled[a] = float((mae * pts).sum() / pts.sum())
+        k = int(np.argmin(pts))
+        rest = np.arange(len(mine)) != k
+        without[a] = float(mae[rest].mean()) if rest.any() else float(mae.mean())
+        thin_tool, thin_points = mine[k]["validation"], int(pts[k])
+    return {
+        "means_pooled_points": pooled,
+        "means_without_thinnest": without,
+        "thinnest_tool": {"tool": thin_tool, "points": thin_points},
+    }
 
 
 def _json_value(x):
@@ -412,6 +573,7 @@ def decide(study: Study, rows: list[dict], config_of) -> dict:
         "type": kind,
         "threshold_s": threshold,
         "means": {a: float(v.mean()) for a, v in maes.items()},
+        **disclosures(rows, arms),
     }
     adopted: dict = {}
     if kind == "lr_then_family":
@@ -464,8 +626,56 @@ def decide(study: Study, rows: list[dict], config_of) -> dict:
     return out
 
 
+def _aggregate_calibration(study: Study, runs: Path | None, store: SegmentStore) -> dict:
+    from rulfuse.gate3 import aggregate_calibration, render_calibration_report
+
+    decision, cells = aggregate_calibration(study, runs, store)
+    out_dir = study.run_dir(runs)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    flat = [
+        {
+            "validation": c["validation"],
+            "done": c["done"],
+            **(
+                {}
+                if not c["done"]
+                else {
+                    "points": c["points"],
+                    "scale_a": c["scale_a"],
+                    "scale_b": c["scale_b"],
+                    "q_c": c["q_c"],
+                    **{
+                        f"{k}_{m}": c["methods"][m][k]
+                        for m in c["methods"]
+                        for k in ("coverage", "winkler", "width")
+                    },
+                    **{f"filter_{k}": v for k, v in c["filter"].items()},
+                }
+            ),
+        }
+        for c in cells
+    ]
+    keys = list(dict.fromkeys(k for r in flat for k in r))
+    with (out_dir / "summary.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, keys)
+        w.writeheader()
+        w.writerows(flat)
+    decision["adopted"] = study.inherited(runs)
+    decision["study"] = study.name
+    decision["validation_only"] = True
+    (out_dir / "decision.json").write_text(
+        json.dumps(decision, indent=1, default=_json_value), encoding="utf-8"
+    )
+    (out_dir / "REPORT.md").write_text(
+        render_calibration_report(study, cells, decision), encoding="utf-8"
+    )
+    return decision
+
+
 def aggregate(study: Study, runs: Path | None = None, store: SegmentStore | None = None) -> dict:
     store = store or open_store(study.spec)
+    if study.spec["decision"]["type"] == "calibration":
+        return _aggregate_calibration(study, runs, store)
     rows = [r for arm in study.arms for r in score_arm(study, arm, store, runs)]
     out_dir = study.run_dir(runs)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -475,6 +685,9 @@ def aggregate(study: Study, runs: Path | None = None, store: SegmentStore | None
         w.writeheader()
         w.writerows(rows)
     decision = decide(study, rows, lambda a: study.config(a, runs))
+    versions = sorted({v for r in rows if r.get("done") for v in r["code_versions"].split(",")})
+    decision["code_versions"] = [int(v) for v in versions]
+    decision["mixed_code_versions"] = len(versions) > 1
     # what later studies inherit: earlier adoptions plus this study's
     decision["adopted"] = {**study.inherited(runs), **decision.get("new_adoptions", {})}
     decision["study"] = study.name
@@ -493,15 +706,25 @@ def render_report(study: Study, rows: list[dict], decision: dict) -> str:
         f"Validation units only (D15); {len(study.seeds)}-seed ensembles; window MAE (s).",
         "",
     ]
+    if decision.get("mixed_code_versions"):
+        lines += [
+            f"**Warning: fits of code versions {decision['code_versions']} are mixed in this "
+            "study** (see the code_versions column of summary.csv); their comparison is not "
+            "like for like.",
+            "",
+        ]
     lines += [
-        "| Arm | Mean window MAE | Mean B2 | Mean B0 | Folds better than B2 | Seed sd | Warnings |",
-        "|---|---|---|---|---|---|---|",
+        "| Arm | Mean window MAE | Pooled-point MAE | MAE w/o thinnest | Mean B2 | Mean B0 "
+        "| Folds better than B2 | Seed sd | Warnings |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for arm in study.arms:
         mine = [r for r in rows if r["arm"] == arm and r.get("done")]
         if not mine:
-            lines.append(f"| {arm} | not done | | | | | |")
+            lines.append(f"| {arm} | not done | | | | | | | |")
             continue
+        pooled = decision.get("means_pooled_points", {}).get(arm, float("nan"))
+        without = decision.get("means_without_thinnest", {}).get(arm, float("nan"))
         m = np.mean([r["window_mae_s"] for r in mine])
         b2m = np.mean([r["b2_window_mae_s"] for r in mine])
         b0m = np.mean([r["b0_window_mae_s"] for r in mine])
@@ -509,9 +732,16 @@ def render_report(study: Study, rows: list[dict], decision: dict) -> str:
         sd = np.mean([r["seed_sd_s"] for r in mine])
         warn = sum(r["warnings"] for r in mine)
         lines.append(
-            f"| {arm} | {m:.1f} | {b2m:.1f} | {b0m:.1f} | {better}/{len(mine)} "
-            f"| {sd:.1f} | {warn} |"
+            f"| {arm} | {m:.1f} | {pooled:.1f} | {without:.1f} | {b2m:.1f} | {b0m:.1f} "
+            f"| {better}/{len(mine)} | {sd:.1f} | {warn} |"
         )
+    thin = decision.get("thinnest_tool") or {}
+    if thin.get("tool"):
+        lines += [
+            "",
+            "Pooled-point MAE weighs each tool by its window points; MAE w/o thinnest leaves "
+            f"out {thin['tool']} ({thin['points']} window points). Both are reported only (D28).",
+        ]
     lines += [
         "",
         "## Decision",
