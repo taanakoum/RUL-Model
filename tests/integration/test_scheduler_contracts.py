@@ -120,6 +120,21 @@ def test_failed_submission_cannot_start_aggregation(shell_sandbox):
     assert "aggregate" not in calls[0]
 
 
+def test_unneeded_conditional_study_submits_no_jobs(shell_sandbox):
+    bash, root, env = shell_sandbox
+    result = subprocess.run(
+        [bash, "slurm/study.sh", "example"],
+        cwd=root,
+        env={**env, "PYTHON_STATUS": "3"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "nothing submitted" in result.stdout
+    assert not (root / "sbatch.log").exists()
+
+
 @pytest.mark.parametrize("index,expected", [(0, [10, 11, 12]), (13, [49])])
 def test_array_tail_runs_exactly_the_requested_manifest_lines(shell_sandbox, index, expected):
     bash, root, env = shell_sandbox

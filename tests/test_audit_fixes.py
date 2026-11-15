@@ -242,15 +242,18 @@ def test_gate2_reports_pooled_and_without_thinnest(tmp_path):
 # ----------------------------------------------------------------------------- F09
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.skipif(
+    shutil.which("bash") is None and not Path("C:/Program Files/Git/bin/bash.exe").is_file(),
+    reason="needs bash",
+)
 def test_status_counts_inner_fits(tmp_path):
     study = tmp_path / "runs" / "g3"
     study.mkdir(parents=True)
     (study / "manifest.tsv").write_text(
-        "task\tarm\tfold_test\tseeds\tinner\n0\td\tT1\t0,1\t-1\n1\td\tT1\t0,1\t0\n",
+        "task\tarm\tfold_test\tseeds\tinner\n0\td\tT1\t0\t-1\n1\td\tT1\t0\t0\n",
         encoding="utf-8",
     )
-    for sub in ("seed-0", "seed-1", "inner-0/seed-0", "inner-0/seed-1"):
+    for sub in ("seed-0", "inner-0/seed-0"):
         (study / "d" / "fold-T1" / sub).mkdir(parents=True)
         (study / "d" / "fold-T1" / sub / "DONE").write_text("ok", encoding="utf-8")
     env = {
@@ -259,9 +262,14 @@ def test_status_counts_inner_fits(tmp_path):
         "PYTHON": sys.executable.replace("\\", "/"),
     }
     out = subprocess.run(
-        ["bash", "slurm/status.sh"], cwd=REPO, env=env, capture_output=True, text=True, timeout=120
+        [shutil.which("bash") or "C:/Program Files/Git/bin/bash.exe", "slurm/status.sh"],
+        cwd=REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
     ).stdout
-    assert "RUL-Fuse study g3: 4/4 fits" in out
+    assert "RUL-Fuse study g3: 2/2 fits" in out
 
 
 def test_b6_uses_the_arm_json_seeds_by_default(tmp_path):

@@ -117,7 +117,7 @@ for an inner fit, the held-out units and the step count. The identity is checked
 - **at aggregation:** code versions are written to `summary.csv`, `decision.json` and the
   report, with a warning when they are mixed.
 
-**Code versions are per fusion family**: F0 is now version 2 and F1 stays at version 1, since
+**Code versions are per fusion family**: F0 is now version 2 (version 3 after the test review's T01 fix, see TEST_REVIEW_2026-11-15_FIXES.md) and F1 stays at version 1, since
 F1 is unchanged (F01 tests). Fits written before the field count as version 1. Old F1 fits
 are therefore still copied, and old F0 fits are not. A study can list
 `accept_code_versions` to copy older fits knowingly.

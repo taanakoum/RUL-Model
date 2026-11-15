@@ -199,6 +199,9 @@ def run_checks(
     checks: list[int],
     device: str = "cpu",
 ) -> dict:
+    unknown = sorted(set(checks) - set(range(1, 8)))
+    if not checks or unknown:  # test review T09: no vacuous pass
+        raise ValueError(f"sanity checks must be a non-empty subset of 1-7, got {checks}")
     out_dir.mkdir(parents=True, exist_ok=True)
     report: dict = {}
     for k in checks:

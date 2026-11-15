@@ -172,6 +172,24 @@ def _image_recordings(store: SegmentStore, unit: str, available: np.ndarray) -> 
     return np.maximum(pos, 0)
 
 
+def _check_features(store: SegmentStore, signal_features, image_features, config) -> None:
+    """The caches must belong to this store and be complete where they are read (test review
+    T02): discovery checks this, but a caller can hand any cache to a fit."""
+    used = []
+    if signal_features is not None and config.uses_signal:
+        used.append(("signal", signal_features, None))
+    if image_features is not None and config.image_kinds:
+        rows = np.isin(store.images["kind"], list(config.image_kinds))
+        used.append(("image", image_features, rows))
+    for kind, features, rows in used:
+        owner = features.meta.get("signature", {}).get("store")
+        if owner != store.signature:
+            raise ValueError(f"{kind} features belong to store {owner!r}, not {store.signature}")
+        done = np.asarray(features.done, bool)
+        if not (done if rows is None else done[rows]).all():
+            raise ValueError(f"{kind} features are incomplete: extract them before a fit")
+
+
 def build_fold_data(
     store: SegmentStore,
     signal_features: SignalFeatures | None,
@@ -184,6 +202,7 @@ def build_fold_data(
     from the training units only (P7)."""
     seg, rec, img = store.segments, store.recordings, store.images
     horizon = store.settings.horizon_s
+    _check_features(store, signal_features, image_features, config)
     names = units or [*fold.train, fold.validation, fold.test]
     names = list(dict.fromkeys(names))
     train = np.isin(seg["unit"], fold.train)

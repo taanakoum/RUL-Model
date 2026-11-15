@@ -109,7 +109,7 @@ See the dated test review for measured results and known failures.
 | P11 fusion | causal/gradient tests, padded batches, modality combinations, channel permutation | F0 first-photo failure; full real scientific sanity checks |
 | P12 heads/loss | hand computations, gradient isolation, equal tool weights, cap/lag masks | Some nonphysical inputs accepted; real scale recovery remains scientific validation |
 | P13 augmentation | `test_tokens`, ten deterministic randomized trajectory trials | Empirical dropout-rate and augmented-life-distribution acceptance can be expanded |
-| P14 training | schedule/selection tests; F0/F1 exact CPU resume; actual inner fits | CUDA exact resume and full scientific sanity checklist on deployed environment |
+| P14 training | schedule/selection tests; F0/F1 exact CPU resume; actual inner fits; all seven sanity-runner paths executed on synthetic fixtures | Vacuous sanity-selection failure; CUDA resume and real scientific sanity checklist on deployed environment |
 | P15 uncertainty | one-seed moments/intervals, Monte Carlo, conformal/filter causality, calibration lifecycle | Corrupt artifacts accepted; real independent coverage remains a gate |
 | P16 baselines | `test_baselines`, `test_degradation`, toy feature/baseline CLI | Full real B0-B2 reproduction and R1 scientific superiority |
 | P17 metrics/stats | `test_evaluation`, `test_metrics`, `test_stats`, `test_uncertainty` | Statistical tests have finite Monte Carlo tolerances |

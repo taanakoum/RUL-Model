@@ -70,8 +70,9 @@ def seed_everything(fold_index: int, seed: int) -> np.random.Generator:
 # a fit of that family computes, so a fit made by older code is neither copied nor taken as
 # finished (B1, audit F01/F03). Fits written before the field existed are version 1.
 #   F0 2: reads only valid, earlier images in padded batches (audit F01, 2026-11-15).
+#   F0 3: an absent image expert passes nothing of a photo to the gate (test review T01).
 #   F1 1: unchanged (it has no image-state lookup; tests/test_padded_images.py).
-CODE_VERSION_BY_FUSION = {"F1": 1, "F0": 2}
+CODE_VERSION_BY_FUSION = {"F1": 1, "F0": 3}
 CODE_VERSION = max(CODE_VERSION_BY_FUSION.values())
 
 

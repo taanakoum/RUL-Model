@@ -8,6 +8,7 @@ decisions inherited from earlier gates plus the arm's own overrides
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
@@ -73,6 +74,59 @@ class FitConfig:
         if self.token_mode not in TOKEN_MODES:
             raise ValueError(f"token_mode must be one of {TOKEN_MODES}")
         object.__setattr__(self, "players", tuple(self.players))
+        self._check_values()
+
+    def _check_values(self) -> None:
+        """Reject settings no fit can use, before any training (test review T07)."""
+        problems = []
+
+        def finite(name: str) -> float:
+            value = float(getattr(self, name))
+            if not math.isfinite(value):
+                problems.append(f"{name} must be finite")
+            return value
+
+        for name in (
+            "dropout",
+            "modality_dropout",
+            "all_modality_dropout",
+            "channel_dropout",
+            "token_dropout",
+            "ema_decay",
+        ):
+            if not 0.0 <= finite(name) <= 1.0:
+                problems.append(f"{name} must be in [0, 1]")
+        for name in (
+            "rho_max",
+            "feature_noise",
+            "weight_decay",
+            "min_lr",
+            "w_far",
+            "nll_weight",
+            "hi_weight",
+            "cons_weight",
+            "mono_weight",
+            "expert_weight",
+        ):
+            if finite(name) < 0:
+                problems.append(f"{name} must be >= 0")
+        for name in ("lr", "grad_clip", "pair_max_fraction"):
+            if not finite(name) > 0:
+                problems.append(f"{name} must be > 0")
+        for name in ("d_model", "rank", "layers", "heads", "ffn", "copies", "eval_every"):
+            if int(getattr(self, name)) < 1:
+                problems.append(f"{name} must be >= 1")
+        for name in ("phase_a_steps", "warmup_steps", "nll_ramp_steps", "patience"):
+            if int(getattr(self, name)) < 0:
+                problems.append(f"{name} must be >= 0")
+        if self.heads >= 1 and self.d_model % self.heads:
+            problems.append("d_model must be a multiple of heads")
+        if self.max_steps <= self.phase_a_steps:
+            problems.append("max_steps must exceed phase_a_steps (phase B needs steps)")
+        if len(set(self.players)) != len(self.players):
+            problems.append("players must not repeat")
+        if problems:
+            raise ValueError("invalid fit configuration: " + "; ".join(problems))
 
     @property
     def image_kinds(self) -> tuple[str, ...]:

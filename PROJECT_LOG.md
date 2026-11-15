@@ -1447,3 +1447,38 @@ F1); `tests/test_requires.py`. If F1 wins, Gate 2b's options stay the plan defau
 **Full suite on the tree with Codex's new tests:** everything passes except 15 cases of Codex's
 `tests/unit/test_input_validation.py`, which ask for input checks the code does not have yet
 (an invalid horizon, Student-t scale, Kalman noise, fit configuration); Codex is working on them.
+
+## 2026-11-15 — Strict test review completed against the one-seed protocol
+
+This later review supersedes the partial-suite count immediately above. Read the complete
+plan/EDA and rechecked D31's current conditional Gate 2b path. Added 204 cases in unit,
+integration, end-to-end, real-data and CUDA categories, and classified the legacy tests.
+The current acceptance path uses seed 0; retained multi-seed APIs are explicitly marked
+`compatibility`, not imposed on production studies. The scheduler's conditional skip,
+packed tails and outer/inner dependencies are exercised without submitting jobs.
+
+Combined unique results: **419 passed, 63 failed, 4 skipped** (486 cases). The current
+protocol has 52 strict failures; 11 more concern compatibility. All 280 executable legacy
+cases and all 40 end-to-end cases passed. New failures are preserved without `xfail` and
+grouped into nine findings, rather than treated as 63 separate bugs. Highest priority:
+**T01, 8.5/10**, a remaining F0 first-future-photo path through the gate's scale inputs,
+confirmed by perturbation and gradients. Other findings cover invalid feature/prediction
+artifacts, incomplete predecessor decisions, invalid inputs, empty manifests, and vacuous
+sanity passes. No production model code or real experiment outputs changed in this review.
+
+Statement coverage 91.9%, branch coverage 80.9%; Ruff and Pyright pass. All seven actual
+sanity-runner paths executed on synthetic fixtures; their criteria still need the intended
+real scientific runs. The 23 selected real-data checks pass. CUDA and real cached Mantis/
+DINO checkpoint checks remain unverified here (four skips). Real held-out results stay
+sealed. See `docs/TEST_REVIEW_2026-11-15.md` for severity scores and measured outcomes,
+its `.evidence.json` for source hashes, and `docs/TESTING.md` for categories, commands and
+the P1–P22 coverage/gap matrix. The strict failures require production remediation.
+
+## 2026-11-15 — Codex test review T01-T09 fixed
+
+Codex's strict tests (docs/TEST_REVIEW_2026-11-15.md) found 63 failures in 9 groups. All fixed in
+the production code, no test weakened; details in docs/TEST_REVIEW_2026-11-15_FIXES.md. Main
+one: T01, a second F0 future-photo path (an absent image expert's scale still reached the gate).
+F0 is now code version 3. Full suite with real-data checks: 492 passed, 0 failed, 2 skipped
+(cached encoder weights), 46 deselected (weights, GPU). Ruff and pyright clean. Ruche order
+unchanged (runbook §15.7).

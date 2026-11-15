@@ -324,9 +324,16 @@ class RULFuse(nn.Module):
             read = torch.gather(st, 1, idx[..., None].expand(-1, -1, st.shape[-1]))
             t_img = torch.gather(lt, 1, idx)
             present_i = (last_slot >= 0) & torch.isfinite(t_img) & ~batch["drop_images"][:, None]
-            mu0, sg_i, nu_i = self.i_head(read)
+            # where the expert is absent (no photo yet, or photos dropped) nothing of a photo
+            # may pass: its state is zeroed and its outputs take the fixed "no image" values
+            # below, because the gate reads every expert's scale, absent ones included
+            # (test review T01: the clamped slot 0 is the *first future* photo)
+            read = torch.where(present_i[..., None], read, torch.zeros_like(read))
+            mu0, sg0, nu0 = self.i_head(read)
             age = torch.where(present_i, batch["tau"] - t_img, torch.zeros_like(t_img))
-            mu_i = (mu0 - age / self.horizon).clamp_min(1e-4)
+            mu_i = torch.where(present_i, (mu0 - age / self.horizon).clamp_min(1e-4), mu_i)
+            sg_i = torch.where(present_i, sg0, sg_i)
+            nu_i = torch.where(present_i, nu0, nu_i)
         mus = torch.stack([mu_u, mu_s, mu_i], -1)
         sgs = torch.stack([sg_u, sg_s, sg_i], -1)
         nus = torch.stack([nu_u, nu_s, nu_i], -1)

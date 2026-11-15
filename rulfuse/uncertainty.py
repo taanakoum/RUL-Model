@@ -38,6 +38,8 @@ def mixture_moments(
     mu, sigma, nu = _params(mu, sigma, nu)
     if np.any(nu <= 2.0):
         raise ValueError("mixture_moments needs nu > 2")
+    if not (np.isfinite(sigma).all() and np.all(sigma > 0)):  # test review T07
+        raise ValueError("mixture_moments needs finite sigma > 0")
     aleatoric = np.mean(sigma**2 * nu / (nu - 2.0), axis=0)
     return mu.mean(axis=0), aleatoric + mu.var(axis=0)
 
@@ -229,6 +231,10 @@ def kalman_rul(
         raise ValueError("tau, mu, var must have the same length")
     if np.any(np.diff(tau) < 0):
         raise ValueError("tau must be non-decreasing")
+    if not (np.isfinite(q) and q >= 0):  # test review T07
+        raise ValueError(f"q must be finite and >= 0, got {q}")
+    if not (np.isfinite(var).all() and np.all(var >= 0)):
+        raise ValueError("measurement variances must be finite and >= 0")
     n = mu.size
     mean, pvar = np.empty(n), np.empty(n)
     cap = horizon_s - cap_margin_s

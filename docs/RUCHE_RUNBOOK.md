@@ -1006,7 +1006,7 @@ The audit's fixes are in `docs/AUDIT_2026-11-15_FIXES.md`; the plan is D31. In o
 
    Then the freeze, once we have agreed on the report (§15.6).
 
-Do not resubmit `gate2a` or `gate2b` after the pull: their F0 fits are code version 1 and
+Do not resubmit `gate2a` or `gate2b` after the pull: their F0 fits are code version 1 (current F0: 3) and
 `run-task` stops with `StaleFitError` rather than counting them as current.
 
 ## 16. Troubleshooting

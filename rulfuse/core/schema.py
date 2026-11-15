@@ -173,10 +173,18 @@ def validate(ds: Dataset, check_signals: bool = False) -> None:
     each referenced source once (shape and finiteness)."""
     problems: list[str] = []
     s = ds.settings
-    if not s.horizon_s > 0:
-        problems.append("settings: horizon_s must be > 0")
-    if not (s.sample_rate_hz > 0 and s.model_rate_hz > 0):
-        problems.append("settings: sample rates must be > 0")
+    if not (math.isfinite(s.horizon_s) and s.horizon_s > 0):
+        problems.append("settings: horizon_s must be finite and > 0")
+    rates = (s.sample_rate_hz, s.model_rate_hz)
+    if not all(math.isfinite(r) and r > 0 for r in rates):
+        problems.append("settings: sample rates must be finite and > 0")
+    for kind, spec in ds.image_specs.items():
+        if not (int(spec.height) > 0 and int(spec.width) > 0):
+            problems.append(f"image type {kind}: height and width must be > 0")
+        if spec.crop is not None:
+            top, left, bottom, right = spec.crop
+            if not (0 <= top < bottom <= 1 and 0 <= left < right <= 1):
+                problems.append(f"image type {kind}: crop needs 0 <= top < bottom <= 1, same for x")
     if s.baseline_recordings < 1:
         problems.append("settings: baseline_recordings must be >= 1")
     if not (s.segment_s > 0 and 0 <= s.min_remainder_s <= s.segment_s):
@@ -199,7 +207,9 @@ def validate(ds: Dataset, check_signals: bool = False) -> None:
             continue
         previous_end = -math.inf
         for rec in unit.recordings:
-            if not (math.isfinite(rec.start_s) and rec.duration_s > 0):
+            if not (math.isfinite(rec.start_s) and math.isfinite(rec.duration_s)) or not (
+                rec.duration_s > 0
+            ):
                 problems.append(f"{where}, {rec.key}: need a finite start and duration > 0")
             if rec.start_s < previous_end - TIME_TOLERANCE_S:
                 problems.append(f"{where}, {rec.key}: starts before the previous recording ends")

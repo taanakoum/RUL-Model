@@ -227,6 +227,8 @@ def extract_signal_features(
             blocks.append(w.reshape(-1, encoder.length))
             counts.append(w.shape[1])
         embedded = encoder.encode(np.concatenate(blocks))
+        if not np.isfinite(embedded).all():  # test review T03: never publish NaN features
+            raise ValueError(f"{encoder.name} returned nonfinite embeddings; nothing was cached")
         offset = 0
         for d, k in zip(ids, counts, strict=True):
             e = embedded[offset : offset + c * k].reshape(c, k, -1)
@@ -351,7 +353,10 @@ def extract_image_features(
             pixels = np.stack(
                 [normalize(prepared_pixels(store.image_path(r), specs[kind])) for r in rows]
             )
-            tokens[rows] = encoder.encode(pixels).astype(np.float16)
+            out = encoder.encode(pixels)
+            if not np.isfinite(out).all():  # test review T03
+                raise ValueError(f"{encoder.name} returned nonfinite image tokens")
+            tokens[rows] = out.astype(np.float16)
             tokens.flush()
             done[rows] = True
             _save_npy(folder / "done.npy", done)

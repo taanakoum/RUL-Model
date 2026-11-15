@@ -111,7 +111,13 @@ class Study:
             path = (runs or paths.runs_dir()) / name / "decision.json"
             if not path.is_file():
                 raise FileNotFoundError(f"{path}: aggregate study {name!r} first")
-            adopted.update(json.loads(path.read_text(encoding="utf-8"))["adopted"])
+            decision = json.loads(path.read_text(encoding="utf-8"))
+            if decision.get("complete") is False:  # test review T05
+                raise ValueError(
+                    f"{path}: study {name!r} is incomplete (missing {decision.get('missing')}); "
+                    "finish and aggregate it before a study inherits from it"
+                )
+            adopted.update(decision["adopted"])
         return adopted
 
     def config(self, arm: str, runs: Path | None = None) -> FitConfig:
@@ -123,7 +129,12 @@ def study_folds(study: Study, units: list[str]) -> list[Fold]:
     """The study's folds: all of them, or the ``folds`` it names (by test unit)."""
     folds = leave_one_unit_out(units)
     named = study.spec.get("folds")
-    return [f for f in folds if f.test in named] if named else folds
+    if not named:
+        return folds
+    unknown = sorted(set(named) - {f.test for f in folds})
+    if unknown:  # test review T06: a misspelled fold must not make an empty study
+        raise ValueError(f"study {study.name!r} names unknown folds {unknown}")
+    return [f for f in folds if f.test in named]
 
 
 def open_store(spec: dict) -> SegmentStore:
@@ -508,8 +519,9 @@ def ensemble_validation(study_dir: Path, arm: str, fold: Fold, seeds: list[int])
         if not (path.parent / "DONE").is_file():
             return None
         parts.append(read_validation_rows(path))
-    order = [np.lexsort((p["tau_s"],)) for p in parts]
-    parts = [{k: v[o] for k, v in p.items()} for p, o in zip(parts, order, strict=True)]
+    from rulfuse.members import checked_members
+
+    parts = checked_members(parts, fold.validation)  # test review T04, T08
     mu = np.stack([p["mu_s"] for p in parts])
     sigma = np.stack([p["sigma_s"] for p in parts])
     nu = np.stack([p["nu"] for p in parts])

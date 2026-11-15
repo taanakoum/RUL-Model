@@ -70,12 +70,12 @@ def read_role_rows(path: Path, role: str) -> dict[str, np.ndarray]:
 
 
 def stack_seeds(parts: list[dict[str, np.ndarray]]) -> dict:
-    """Seed members of one tool: rows put in time order, then stacked to (S, N)."""
-    parts = [{k: v[np.argsort(p["tau_s"], kind="stable")] for k, v in p.items()} for p in parts]
+    """Seed members of one tool: rows put in time order, checked (one tool, the same points,
+    truth and window, finite parameters; test review T08), then stacked to (S, N)."""
+    from rulfuse.members import checked_members
+
+    parts = checked_members(parts)
     first = parts[0]
-    for p in parts[1:]:
-        if not np.array_equal(p["tau_s"], first["tau_s"]):
-            raise ValueError("seed members disagree on the prediction points of a tool")
     return {
         "tau": first["tau_s"],
         "rul": first["rul_s"],

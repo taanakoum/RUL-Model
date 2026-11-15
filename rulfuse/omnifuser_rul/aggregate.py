@@ -138,6 +138,26 @@ def ensemble(predictions: dict[str, np.ndarray], role: str) -> dict[str, np.ndar
     for f in np.unique(keys[:, 0]):  # every member of a fold predicts the same points
         if len(np.unique(counts[keys[:, 0] == f])) > 1:
             raise ValueError(f"fold {f}: the seed members do not predict the same points")
+    # by identity, not by count (test review T08): no seed twice at a point, every point
+    # predicted by every seed of its fold, and one tool and grid flag per point
+    if "seed" in predictions:
+        seed = np.asarray(predictions["seed"])[keep]
+        triples = np.stack([fold, row, seed], axis=1)
+        if len(np.unique(triples, axis=0)) != len(triples):
+            raise ValueError("a seed predicts the same point twice")
+        for f in np.unique(fold):
+            n_seeds = len(np.unique(seed[fold == f]))
+            if np.any(counts[keys[:, 0] == f] != n_seeds):
+                raise ValueError(f"fold {f}: not every seed predicts every point")
+        for column in (unit, on_grid):
+            labelled = np.unique(
+                np.stack(
+                    [fold, row, np.unique(column, return_inverse=True)[1].reshape(-1)], axis=1
+                ),
+                axis=0,
+            )
+            if len(labelled) != len(keys):
+                raise ValueError("seed members disagree on a point's tool or grid flag")
     total = np.zeros(len(keys))
     np.add.at(total, inverse.reshape(-1), value)
     first = np.zeros(len(keys), dtype=np.int64)

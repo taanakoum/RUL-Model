@@ -30,6 +30,8 @@ class Targets:
 
 def rul_targets(tau_s: np.ndarray, failure_s: float, horizon_s: float) -> Targets:
     """Targets of prediction points (every τ must be at or before the failure)."""
+    if not (np.isfinite(horizon_s) and horizon_s > 0):  # test review T07
+        raise ValueError(f"the horizon must be finite and > 0, got {horizon_s}")
     rul = failure_s - np.asarray(tau_s, dtype=np.float64)
     if (rul < -TIME_TOLERANCE_S).any():
         raise ValueError("prediction points must not lie after the failure")
