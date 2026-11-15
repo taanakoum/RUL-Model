@@ -158,6 +158,14 @@ def test_gate3_end_to_end_on_the_toy(toy, tmp_path):
         assert (copied / "reused_from.txt").is_file()
         assert "inner-" in (copied / "reused_from.txt").read_text()
 
+    # the aggregation refuses an inner fit that did not train for its outer fit's kept step
+    sel = inner_fit_dir(tmp_path / "g3", "design", fold, 0, 1) / "selection.json"
+    info = json.loads(sel.read_text(encoding="utf-8"))
+    info["selected_step"] += 1
+    sel.write_text(json.dumps(info), encoding="utf-8")
+    with pytest.raises(ValueError, match="kept step"):
+        aggregate(study, tmp_path, store=toy.store)
+
 
 def _cell(name, points, cov, wink):
     methods = {m: {"coverage": cov[m], "winkler": wink[m], "width": 1.0} for m in cov}
@@ -233,27 +241,3 @@ def test_fit_q_scores_only_the_masked_points():
     assert q_all > 0 and q_masked > 0
     x, _ = kalman_rul(tau, noisy, var, q_masked, 40.0, 3.0)
     assert np.all((x >= 0) & (x <= 40.0))
-
-
-def test_fit_reuse_needs_the_same_encoders_and_code_version(toy, tmp_path):
-    """Audit F03: another encoder, or a fit made by older code, is not copied silently."""
-    from rulfuse.study import find_identical_fit
-    from rulfuse.train import fit_key
-
-    fold = toy.folds[0]
-    first = Study("first", _spec(toy, fold, inner=None, decision={"type": "none"}))
-    write_manifest(first, toy.store.unit_names, tmp_path)
-    run_task(first, 0, "cpu", tmp_path, **_kw(toy))
-    key = fit_key(TINY)
-    target = tmp_path / "elsewhere" / "design" / f"fold-{fold.test}" / "seed-0"
-    args = (tmp_path, "toy/x", key, fold, 0, target)
-    same = ("projection", "pixelstats")
-    source = find_identical_fit(*args, encoders=same)
-    assert source is not None and source.parent.parent.parent.name == "first"
-    assert find_identical_fit(*args, encoders=("mantis8m", "dinov2b")) is None
-    selection = source / "selection.json"
-    info = json.loads(selection.read_text(encoding="utf-8"))
-    del info["code_version"]  # a fit from before the field: version 1
-    selection.write_text(json.dumps(info), encoding="utf-8")
-    assert find_identical_fit(*args, encoders=same) is None
-    assert find_identical_fit(*args, encoders=same, accept_versions=(1,)) == source

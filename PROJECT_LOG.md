@@ -1369,22 +1369,39 @@ the validation tool; the audit (docs/AUDIT_2026-11-15.md, F02) was right that th
 step its outer fit kept, with no evaluation, so it is also cheaper and the validation tool stays
 independent. Test: with the outer fit's tools, seed and step it reproduces the outer weights.
 
-**Audit findings verified here.**
-- F01 (F0 reads future photos in padded batches): **reproduced** with the audit's script (60.54 s
-  alone, 64.53 s in a padded batch; 0.41 s change from a photo not yet taken). Cause:
-  `fusion.py` counted the zero-padded image times as earlier images. Fixed (last valid, earlier
-  image); regression tests in `tests/test_padded_images.py`; after the fix the script gives
-  60.54 s both ways and 0 change. Single-unit inference was never affected; training was.
-  **Not yet known: how much it changed Gate 2a/2b (every F0 fit trained through it; F1 does not
-  use the lookup).**
-- F03 (fit reuse ignores encoders and code): reuse now needs the same signal and image encoders
-  and `CODE_VERSION` (2 now; fits from before the field are version 1). A study may list
-  `accept_code_versions` to copy older fits knowingly.
-- F04 (freeze accepted a failed coverage gate): `freeze` refuses unless `--amended` is given.
-- F08 (D28 disclosures): done for Gate 3 (pooled and without-thinnest columns); Gate 2 reports
-  and the final report still need them.
-- F09 (status counter): fixed. Pyright and ruff: clean for the changed files.
-- Not touched: F05 (CUDA resume state), F06 (image-free datasets), F07 (B6 seeds).
+**Audit (docs/AUDIT_2026-11-15.md, by Codex): all nine findings checked and fixed.** The
+fix and validation report is docs/AUDIT_2026-11-15_FIXES.md. In short:
+- F01 (F0 read photos not yet taken in padded batches): **reproduced** (60.54 s alone, 64.53 s in
+  a padded batch; 0.41 s change from a photo not yet taken). Cause: `fusion.py` counted padded
+  image times as earlier photos. Fixed; 9 tests in `tests/test_padded_images.py` (the three F0
+  bug tests fail on the old code; every F1 test passes on both: F1 never had it). After the fix
+  the audit's script gives 60.54 s both ways and 0 change. Reach on the real store: 40-60 tool
+  photos per tool; in every fold 5-7 of the 8 training tools were padded, about 81 % of F0's
+  training points. Inference was never padded, so stored validation scores are honest for those
+  weights; the training is what is in doubt.
+- F02: inner fits now train for the outer fit's kept step with no selection (above).
+- F03: fits record an identity (configuration, code version per fusion family, roles, seed,
+  inner held-out units and steps) checked on reuse, on skipping a finished fit, on checkpoint
+  resume and at aggregation (code versions reported, mixed versions flagged). F0 is code version
+  2, F1 stays 1: old F1 fits are still copied, old F0 fits are not. Limits: encoders by name,
+  store by signature (feature-cache contents are not hashed); the version is bumped by hand.
+- F04: `freeze` refuses a failed coverage gate unless `--amended` records a decision.
+- F05: checkpoints save the CUDA generator states and load on the CPU; GPU check pending
+  (`scripts/check_cuda_resume.py` on Ruche).
+- F06: empty image tables keep their columns; an image-free toy trains and predicts.
+- F07: B6 ensembles only the requested seeds (or `arm.json`'s) and refuses unequal members.
+- F08: Gate 2 and Gate 3 reports give pooled-point and without-thinnest-tool values (D28).
+- F09: `status.sh` counts inner fits. Ruff and pyright: clean for the whole package.
+- Validation run: full suite 275 passed, 2 skipped (cached-weight tests); the 4 tests added
+  after it pass. `study.sh gate3` with stub `sbatch` submits outer, then inner (waiting), then
+  aggregation. Not yet validated: F05 on a GPU, the real Ruche submission.
+
+**What it means for the experiments (D30, to decide).** Gate 2a's F1 arms are valid. Its F0 arms
+and every Gate 2b arm (all F0) were trained through the leak, so "F0 at lr 3e-3 over F1" and
+Gate 2b's choices are in doubt. Proposed: let Gate 2b finish untouched (no `git pull` on Ruche
+until its array ends), then rerun Gate 2a as `gate2a-r2` (F1 copied, F0 retrained: 30 tasks,
+about 47 GPU-h), re-decide, rerun Gate 2b on the winner (about 63 GPU-h if F0), then Gate 3.
+Cheaper first step: retrain only F0 lr 3e-3 (about 16 GPU-h) to measure the leak's effect.
 
 **Tests.** `tests/test_gate3.py` and `tests/test_padded_images.py`: inner splits never touch
 the validation or test tool; inner fits predict no test or validation row; the inner fit equals

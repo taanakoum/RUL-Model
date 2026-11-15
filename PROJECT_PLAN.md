@@ -77,6 +77,7 @@ on `Data/` (identical to OmniFuser's `Nonastreda_Data/`), on OmniFuser's
 | D27 | Seeds after Gate 2a: 3 kept, one-seed fallback | (2026-11-13) A one-seed proposal was made and reversed the same day. Gate 2a measured about 50 min per fit and about 2.5 h per 3-fit task (seeds one after another, before D26), about 150 GPU-h in all. Every later study keeps 3 seeds, relying on D26 A1 (seeds side by side on one GPU) to cut the time per task. **Check on Gate 2b's first trained 3-seed tasks** (not the copied default, not the seed-0 controls): if such a task takes more than 2 h, the sweep and every later study switch to seed 0 only (the 3-seed estimate would then exceed the time left before the Dec 1 freeze). **Gate 3 note:** a task with 4 inner fits per seed would take about 4 × the time of one fit even with seeds side by side, over the 4 h limit; Stage 6 must split those tasks or raise the limit | You (2026-11-13) |
 | D28 | Gate 2a decision; the sweep and the Gate 2b controls dropped | (2026-11-14) After Gate 2a the gate rule is kept as planned (per-tool mean of window MAE). **Gate 2a adopts F0 with learning rate 3e-3 (338.8 s).** Both the family and the rate depend on one validation tool, T4 (fold T3): it has 20 window points because 14 of its last 16 passes were never recorded. Validation window MAE (s): F0 lr 3e-4: 374.5 per-tool mean, 285 pooled over points, 277.2 without T4, 295 median, 1250 on T4. F0 lr 1e-3: 371.7, 294, 287.0, 321, 1134. **F0 lr 3e-3: 338.8, 304, 300.0, 324, 688.** F1 lr 3e-3: 383.8, 312, 298.4, 297.5, 1153. Pooled weights are the window points of each validation tool. You chose 3e-3 knowingly: it costs about 23 s on the other 9 tools and buys robustness when recordings are missing (T4). **The final report must give the per-tool mean, the pooled-point MAE and the result without T4.** Other findings: F0 loses to B2 on validation tools T2, T6 and T8 (usage-predictable tools; hypothesis: the gPoE under-weights the usage expert); seed sd of the winner 35.6 s (3 seeds justified); warnings for F0 lr 3e-3: memorization 2, above B2 9, above B0 4, no generalization gap, no cap saturation. A fold named Tk scores validation tool T(k+1) (T10 scores T1). **Sweep (J7, decision 7) dropped:** Gate 2a removed its reasons (no over-fitting, so no d 32 or rank 8; no cap saturation, so no w_far 0.1; ρ_max 0.3 would likely hurt T2, T6 and T8). Gate 3 inherits Gate 2a and Gate 2b only. **Gate 2b's 3 reported controls dropped** (last recording only, no memory, no hinge): the report will not include those ablations; D26 B2 is moot. Gate 2b is now 5 arms (default, no-trajectory-aug, no-phase-a, tokens-relative, tokens-absolute), 50 tasks, 120 fits trained and 30 copied, about 60 GPU-h (est.). About 450 fits remain after Gate 2a (est. ~240 GPU-h) | You (2026-11-14) |
 | D29 | Gate 3 design | (2026-11-15, proposed with the Stage 6 code; revised after the audit) **Inner fits follow §7.2 step 10:** each outer fold has 4 inner fits (`inner` in the study spec); each holds out 2 of the 8 training tools and trains on the other 6 for **exactly the step its outer fit kept** (`fit(heldout=..., fixed_steps=...)`), on the outer learning-rate schedule, with **no evaluation and no selection**: the validation tool is not used, so it stays an independent coverage check. With the outer fit's own tools, seed and step an inner fit reproduces the outer weights (tested). An inner fit predicts only its held-out tools, never the test tool. One inner split per task, 3 seeds side by side; the inner array waits for the outer array (`slurm/study.sh`). **Calibration choice:** methods b (out-of-fold Student-t scale) and c (cross-conformal) compete by mean validation Winkler score under mean coverage in [0.85, 0.95]; within half of 3 % of the best, b wins (cost order b, c). **Method a is reported only**: it is fitted on the validation tool and scored on it, so its score is in sample (`decision.candidates` in `gate3.json` puts it back). Pooled-point and without-thinnest-tool coverage and Winkler are reported beside the per-tool means (D28). **Filter (Rule A):** a Kalman filter on the ensemble mean with the b-calibrated variance, q fitted on the out-of-fold tools; its interval is x ± k·sqrt(P), k the out-of-fold 90 % quantile of the normalized error; adopted if its Winkler score beats the chosen method's by 3 % on at least 7 of 10 tools and its coverage is in the band. **Freeze:** `rulfuse freeze` writes `configs/final.json` (the repository has no YAML reader) with the design, the calibration choice and a hash, and **refuses if no candidate meets the coverage band** unless `--amended TEXT` records a decision that accepts it. | You (to confirm) |
+| D30 | F0 trained through a future-photo leak (audit F01) | (2026-11-15, **to decide**) The 2026-11-15 audit found, and the code confirmed, that F0 read the image-GRU state of photos not yet taken whenever a batch padded image times; about 81 % of F0's training points belonged to a padded tool. Fixed in `fusion.py` (F0 code version 2); F1 is unaffected (version 1). Validation scores are honest for the stored weights (inference is never padded), but every F0 fit of Gate 2a and Gate 2b was *trained* through the leak, so Gate 2a's "F0 at lr 3e-3 over F1" and all of Gate 2b's choices are in doubt. **Proposed (A):** let the running Gate 2b finish untouched (no `git pull` on Ruche until its array ends) as a leaky reference; then rerun Gate 2a as `gate2a-r2` (F1 arms copied, F0's 3 learning rates retrained, 30 tasks, about 47 GPU-h); re-decide by the same rule; run Gate 2b again on the winner (`gate2b-r2`, about 40 trained tasks, about 63 GPU-h if F0, its default copied); Gate 3 then inherits the r2 studies. The leaky and fixed F0 lr 3e-3 arms measure the leak's effect directly. Alternatives: (B) first retrain only F0 lr 3e-3 (10 tasks, about 16 GPU-h) to size the effect, then decide; (C) keep the results and disclose the leak (not recommended: the project claims causal predictions). Details: docs/AUDIT_2026-11-15_FIXES.md. | You (to decide) |
 
 ---
 
@@ -384,7 +385,7 @@ states the count in the report.
 1. Test predictions are written by every fit but are not aggregated or read
    before the freeze. `rulfuse aggregate` refuses to score test tools for
    studies dated before the freeze unless given `--after-freeze`.
-2. The freeze commits the final configuration (`configs/final.yaml`) and its
+2. The freeze commits the final configuration (`configs/final.json`) and its
    hash.
 3. After the freeze, the final runs (Stage 7) come first, then importance and
    sensitivity (Stage 8). None of them may change the model.
@@ -1431,7 +1432,7 @@ the vendored loader with OmniFuser's whenever both are present.
 ```text
 RUL Model/
   pyproject.toml            package "rulfuse"; extras [test, eda, dev, encoders]
-  configs/                  data/nonastreda.yaml, final.yaml, gate2/, sweep/, gate3/, shapley/, sensitivity/
+  configs/                  data/nonastreda.yaml, final.json, gate2/, sweep/, gate3/, shapley/, sensitivity/
   rulfuse/
     __init__.py             WMI guard (vendored)
     config.py               dataclasses; YAML I/O; signature()
@@ -1495,7 +1496,7 @@ rulfuse feature-check                                           # Ruche J3: go/n
 rulfuse baselines                                               # B0-B2 in seconds
 rulfuse manifest      --study gate2a && sbatch --array=0-59%4 slurm/array.sbatch runs/gate2a/manifest.tsv
 rulfuse aggregate     --study gate2a                            # ensembles, calibration, decision.json
-rulfuse freeze        --config configs/final.yaml              # D15; records the hash
+rulfuse freeze        --study gate3                            # D15; writes configs/final.json with its hash
 rulfuse aggregate     --study final --after-freeze
 rulfuse report        --runs runs/final runs/baselines runs/shapley runs/sensitivity --out runs/report
 rulfuse predict       --model runs/final/fold-T3 --tool T3      # 3-seed ensemble
@@ -1845,7 +1846,7 @@ left. Stage 6 makes its "give or take" trustworthy, then locks the design.
    most accurate ranges on the validation tools win. An optional smoother then
    enforces what real remaining life does: it falls by exactly the time spent
    cutting.
-6. **Freeze.** The chosen design is written to `configs/final.yaml`, its hash is
+6. **Freeze.** The chosen design is written to `configs/final.json`, its hash is
    recorded, and from then on nothing changes before the test scores are read.
 
 **In detail.**
@@ -1854,7 +1855,7 @@ left. Stage 6 makes its "give or take" trustworthy, then locks the design.
 - **Tasks:**
   - J8 (heads × calibration methods, with the inner fits);
   - the filter, by Rule A;
-  - write `configs/final.yaml`; `rulfuse freeze`.
+  - `rulfuse freeze` writes `configs/final.json` (refused if the coverage gate fails).
 - **Outputs:** `runs/gate3`; the frozen configuration and its hash.
 - **Verification:** the P15 scientific check (validation coverage in band, both
   units); reliability curves on validation.

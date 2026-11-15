@@ -63,10 +63,13 @@ def load_predictions(
     ``ArmSpec.signature()``), only the fits whose ``fit.json`` records those settings, so a
     partly rerun arm never mixes fits made with other settings; with ``seeds``, only those
     seeds' folders (the signature leaves seeds out so single fits can be reused, so a folder
-    may hold seeds the arm did not ask for; audit F07)."""
+    may hold seeds the arm did not ask for; audit F07). Without ``seeds``, the seeds of the
+    arm's ``arm.json`` are used when the folder has one."""
     import json
 
     files = sorted(folder.glob("fold-*/seed-*/predictions.parquet"))
+    if seeds is None and (folder / "arm.json").is_file():  # the arm's own seeds
+        seeds = json.loads((folder / "arm.json").read_text(encoding="utf-8"))["spec"]["seeds"]
     if seeds is not None:
         wanted = {int(s) for s in seeds}
         files = [f for f in files if int(f.parent.name.split("-", 1)[1]) in wanted]

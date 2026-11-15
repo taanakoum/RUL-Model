@@ -926,6 +926,11 @@ sacct -u "$USER" -X --name=gate3,gate3-inner -S now-3days --format=JobID%18,JobN
 
 A task over 2 h means the inner fits are slower than estimated: tell me before it ends.
 
+If an outer task fails (a bad GPU node, say), the inner array waits forever
+(`DependencyNeverSatisfied` in `squeue`). Cancel both arrays and the aggregation with the
+`scancel` line `study.sh` printed, then resubmit `bash slurm/study.sh gate3`: finished fits are
+skipped.
+
 When the aggregation finishes:
 
 ```bash
@@ -945,6 +950,28 @@ sbatch --job-name=freeze slurm/cpu.sbatch python -m rulfuse.cli freeze --study g
 This writes `configs/final.json` (the design, the calibration choice, the hash) inside the
 repository on Ruche: copy it home or commit it from Ruche, then you commit it (D15: after this,
 nothing about the model changes before the test scores are read).
+
+### 15.7 After the 2026-11-15 audit
+
+The audit's fixes are described in `docs/AUDIT_2026-11-15_FIXES.md`. Three things to do on
+Ruche:
+
+1. **Do not `git pull` while Gate 2b's array still has tasks waiting or running.** A task that
+   starts after the pull would train the fixed F0 while the others trained the old one. Wait
+   until `squeue -u "$USER"` shows no `gate2b` task (the aggregation may run after the pull: it
+   only reads the fits, and reports their code versions).
+2. **After the pull, check the GPU resume once** (a few minutes, toy data):
+
+   ```bash
+   sbatch --job-name=cuda-resume --time=00:30:00 slurm/job.sbatch python scripts/check_cuda_resume.py
+   tail -n 5 runs/logs/cuda-resume-*.out
+   ```
+
+   It must print PASS. INCONCLUSIVE means two uninterrupted GPU runs already differ; send me
+   the log either way.
+3. **Do not resubmit `gate2a` or `gate2b` after the pull.** Their F0 fits are code version 1, so
+   `run-task` stops with `StaleFitError` rather than counting them as current. Reruns go under
+   new study names once we have decided D30 (PROJECT_PLAN.md, decision table).
 
 ## 16. Troubleshooting
 
