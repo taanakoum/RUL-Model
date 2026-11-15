@@ -324,3 +324,27 @@ def test_aggregation_flags_mixed_code_versions(toy, tmp_path):
     decision = aggregate(study, tmp_path, store=toy.store)
     assert decision["mixed_code_versions"] is True and decision["code_versions"] == [0, 1]
     assert "are mixed" in (tmp_path / "mix" / "REPORT.md").read_text(encoding="utf-8")
+
+
+def test_tasks_side_by_side_equal_tasks_one_after_another(toy, tmp_path):
+    """D31: with one seed, several manifest lines share one GPU task; each fit seeds itself,
+    so the weights equal those of the lines run one after another."""
+    from rulfuse.study import run_tasks_side_by_side
+
+    fold = toy.folds[0]
+    spec = _spec(toy, fold, arms={"a": {}, "b": {"memory": False}})
+    for name in ("seq", "par"):
+        write_manifest(Study(name, spec), toy.store.unit_names, tmp_path / name)
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)  # as each side-by-side process (CPU sums depend on the threads)
+    try:
+        for task in (0, 1):
+            run_task(Study("seq", spec), task, "cpu", tmp_path / "seq", **_kw(toy))
+    finally:
+        torch.set_num_threads(threads)
+    run_tasks_side_by_side(Study("par", spec), [0, 1], "cpu", tmp_path / "par")
+    for arm in ("a", "b"):
+        sub = Path(arm) / f"fold-{fold.test}" / "seed-0" / "model.pt"
+        a = torch.load(tmp_path / "seq" / "seq" / sub, weights_only=True)
+        b = torch.load(tmp_path / "par" / "par" / sub, weights_only=True)
+        assert all(torch.equal(a[k], b[k]) for k in a)

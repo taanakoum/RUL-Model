@@ -413,6 +413,11 @@ def cmd_run_task(args: argparse.Namespace) -> int:
     from rulfuse.study import Study, run_task
 
     study = Study.load(args.study)
+    if args.parallel_tasks and len(args.task) > 1:
+        from rulfuse.study import run_tasks_side_by_side
+
+        run_tasks_side_by_side(study, args.task, _device(args.device), args.runs_root, args.threads)
+        return 0
     for task in args.task:
         run_task(
             study,
@@ -595,6 +600,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--task", type=int, nargs="+", required=True)
     p.add_argument("--device", default="auto")
     p.add_argument("--parallel-seeds", action="store_true", help="run the seeds side by side (A1)")
+    p.add_argument(
+        "--parallel-tasks", action="store_true", help="run the given tasks side by side (D31)"
+    )
     p.add_argument("--threads", type=int, default=1, help="CPU threads per seed process")
     p.add_argument("--runs-root", type=Path, default=None)
     p.set_defaults(func=cmd_run_task)

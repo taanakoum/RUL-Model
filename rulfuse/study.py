@@ -275,6 +275,36 @@ def _seed_worker(name: str, spec: dict, task: int, seed: int, device: str, runs,
     run_task(Study(name, spec), task, device, runs, seeds=[seed])
 
 
+def _task_worker(name: str, spec: dict, task: int, device: str, runs, threads: int):
+    import torch
+
+    torch.set_num_threads(threads)
+    run_task(Study(name, spec), task, device, runs, parallel=False, threads=threads)
+
+
+def run_tasks_side_by_side(
+    study: Study, tasks: list[int], device: str, runs: Path | None = None, threads: int = 1
+) -> None:
+    """Several manifest lines at once on one device, one process each (A1 across fits, D31).
+    With one seed per line a single fit leaves the GPU mostly idle, as three seeds of one line
+    did before A1. Every fit seeds itself, so the results equal running the lines one after
+    another."""
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    procs = [
+        ctx.Process(target=_task_worker, args=(study.name, study.spec, t, device, runs, threads))
+        for t in tasks
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join()
+    failed = [t for t, p in zip(tasks, procs, strict=True) if p.exitcode != 0]
+    if failed:
+        raise RuntimeError(f"tasks {failed} failed (see the log above)")
+
+
 def run_task(
     study: Study,
     task: int,

@@ -27,13 +27,20 @@ n_outer=$n
 if head -1 "$RULFUSE_DATA_ROOT/runs/$study/manifest.tsv" | grep -q "inner"; then
     n_outer=$(awk -F'\t' 'NR > 1 && $5 == -1' "$RULFUSE_DATA_ROOT/runs/$study/manifest.tsv" | wc -l)
 fi
-array=$(sbatch --parsable --array=0-$((n_outer - 1))%4 --job-name="$study" ${exclude:+"$exclude"} ${opts[@]+"${opts[@]}"} \
-    slurm/array.sbatch "$study")
+# One seed per line (D31): pack PACK lines into one array task, side by side on one GPU
+# (default 3; RULFUSE_PACK overrides). With several seeds the seeds already fill the GPU.
+n_seeds=$(awk -F'\t' 'NR == 2 {print split($4, s, ",")}' "$RULFUSE_DATA_ROOT/runs/$study/manifest.tsv")
+pack=1
+[ "$n_seeds" -eq 1 ] && pack="${RULFUSE_PACK:-3}"
+chunks() { echo $(( ($2 - $1 + pack) / pack )); }  # array tasks for lines $1..$2
+array=$(sbatch --parsable --array=0-$(( $(chunks 0 $((n_outer - 1))) - 1 ))%4 --job-name="$study" \
+    ${exclude:+"$exclude"} ${opts[@]+"${opts[@]}"} slurm/array.sbatch "$study" "$pack" 0 $((n_outer - 1)))
 array=${array%%;*}
 wait_for="$array"
 if [ "$n_outer" -lt "$n" ]; then
-    inner_array=$(sbatch --parsable --array="$n_outer-$((n - 1))%4" --dependency=afterok:"$array" \
-        --job-name="$study-inner" ${exclude:+"$exclude"} ${opts[@]+"${opts[@]}"} slurm/array.sbatch "$study")
+    inner_array=$(sbatch --parsable --array=0-$(( $(chunks "$n_outer" $((n - 1))) - 1 ))%4 \
+        --dependency=afterok:"$array" --job-name="$study-inner" ${exclude:+"$exclude"} \
+        ${opts[@]+"${opts[@]}"} slurm/array.sbatch "$study" "$pack" "$n_outer" $((n - 1)))
     inner_array=${inner_array%%;*}
     wait_for="$array:$inner_array"
     echo "$study: inner fits: array $inner_array (tasks $n_outer-$((n - 1)); waits for the outer array)"
@@ -41,7 +48,7 @@ fi
 agg=$(sbatch --parsable --dependency=afterok:"$wait_for" --job-name="$study-aggregate" \
     slurm/cpu.sbatch python -m rulfuse.cli aggregate --study "$study")
 agg=${agg%%;*}
-echo "$study: array $array ($n tasks), aggregation $agg (waits for the array)"
+echo "$study: array $array ($n manifest lines, $pack per GPU task), aggregation $agg (waits for the array)"
 echo "Excluded nodes: ${exclude:-none}"
 echo "Result: \$RULFUSE_DATA_ROOT/runs/$study/REPORT.md and decision.json"
 echo "Follow with: bash slurm/status.sh    Cancel: scancel ${wait_for//:/ } $agg"

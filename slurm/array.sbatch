@@ -4,6 +4,10 @@
 # another study is copied, not rerun (B1). Finished fits are skipped and an interrupted one resumes, so a
 # resubmission completes a study.
 #   sbatch --array=0-N%4 slurm/array.sbatch STUDY        (N + 1 = lines of runs/STUDY/manifest.tsv)
+#   sbatch --array=0-M%4 slurm/array.sbatch STUDY PACK FIRST LAST
+# The second form packs PACK manifest lines into one array task, run side by side (D31: with
+# one seed per line, one fit alone leaves the GPU mostly idle): array task j runs lines
+# FIRST + j*PACK ... up to LAST.
 # Usually submitted by slurm/study.sh, which writes the manifest first.
 #SBATCH --job-name=rulfuse-array
 #SBATCH --output=runs/logs/%x-%A_%a.out
@@ -20,8 +24,8 @@ if [ -z "${SLURM_JOB_ID:-}" ] || [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
     echo "Submit this script with sbatch --array; see docs/RUCHE_RUNBOOK.md §15." >&2
     exit 2
 fi
-if [ "$#" -ne 1 ]; then
-    echo "usage: sbatch --array=0-N slurm/array.sbatch STUDY" >&2
+if [ "$#" -ne 1 ] && [ "$#" -ne 4 ]; then
+    echo "usage: sbatch --array=0-N slurm/array.sbatch STUDY [PACK FIRST LAST]" >&2
     exit 2
 fi
 cd "$SLURM_SUBMIT_DIR" || exit 2
@@ -43,5 +47,16 @@ if ! python -c "import torch; torch.zeros(1, device='cuda'); print('GPU ok:', to
 fi
 # The task's seeds run side by side on the one GPU (A1): the model is small, so one fit leaves
 # the A100 mostly idle. Each fit seeds itself, so the results equal a sequential run.
-python -m rulfuse.cli run-task --study "$1" --task "$SLURM_ARRAY_TASK_ID" --device cuda     --parallel-seeds --threads 2
+if [ "$#" -eq 4 ]; then
+    first=$(( $3 + SLURM_ARRAY_TASK_ID * $2 ))
+    last=$(( first + $2 - 1 )); [ "$last" -gt "$4" ] && last=$4
+    tasks=$(seq "$first" "$last" | tr '\n' ' ')
+    echo "manifest lines: $tasks(side by side)"
+    # shellcheck disable=SC2086
+    python -m rulfuse.cli run-task --study "$1" --task $tasks --device cuda \
+        --parallel-tasks --parallel-seeds --threads 2
+else
+    python -m rulfuse.cli run-task --study "$1" --task "$SLURM_ARRAY_TASK_ID" --device cuda \
+        --parallel-seeds --threads 2
+fi
 echo "finished $(date)"
