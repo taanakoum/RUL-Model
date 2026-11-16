@@ -178,11 +178,19 @@ def _pit_inside(y, mu, sigma, nu, level: float) -> np.ndarray:
 
 
 def fold_calibration(
-    study, arm: str, fold: Fold, store: SegmentStore, runs: Path | None, level: float = 0.9
+    study,
+    arm: str,
+    fold: Fold,
+    store: SegmentStore,
+    runs: Path | None,
+    level: float = 0.9,
+    scored: dict | None = None,
 ) -> dict:
-    """Everything Gate 3 needs from one fold; ``{"done": False}`` if a fit is missing."""
+    """Everything Gate 3 needs from one fold; ``{"done": False}`` if a fit is missing.
+    ``scored`` replaces the validation tool by another tool of the same shape; only
+    ``rulfuse.final`` passes it, after the freeze (D15)."""
     horizon = store.settings.horizon_s
-    val = outer_validation(study, arm, fold, runs)
+    val = scored if scored is not None else outer_validation(study, arm, fold, runs)
     oof = oof_tools(study, arm, fold, runs)
     if val is None or oof is None:
         return {"fold_test": fold.test, "validation": fold.validation, "done": False}

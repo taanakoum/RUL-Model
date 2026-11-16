@@ -1,0 +1,15 @@
+{
+ "description": "Retraining Shapley (PROJECT_PLAN.md §11.1, job J11; D24, D31), one seed. The frozen design is retrained on every non-empty coalition of the sensing players: F (force signal) and T (tool photos); usage is in every coalition and the empty coalition is B2. Players are only F and T (D24: tool photos only), so there are three coalitions: F, T, and F+T. F+T is the frozen design itself and is copied from gate3's outer fits (B1); F and T are trained here. Scores are validation-only until the freeze (D15); `rulfuse shapley` computes the values, and the test-tool values are read by `rulfuse final` on or after the freeze date.",
+ "store": "nonastreda/3e357b5a23ff",
+ "signal_encoder": "mantis8m",
+ "image_encoder": "dinov2b",
+ "base": {"players": ["signal", "tool"]},
+ "inherits": ["gate3"],
+ "seeds": [0],
+ "arms": {
+  "F+T": {},
+  "F": {"players": ["signal"]},
+  "T": {"players": ["tool"]}
+ },
+ "decision": {"type": "none"}
+}

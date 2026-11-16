@@ -464,6 +464,40 @@ def cmd_freeze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_shapley(args: argparse.Namespace) -> int:
+    from rulfuse.study import Study
+
+    study = Study.load(args.study)
+    if args.after_freeze:
+        from rulfuse.final import shapley_test
+
+        summary = shapley_test(study, args.runs_root)
+    else:
+        from rulfuse.shapley import run_shapley
+
+        summary = run_shapley(study, args.runs_root)
+    if not summary.get("complete"):
+        print("incomplete: some arm/fold fits are missing")
+        return 1
+    for p, s in summary["players"].items():
+        print(
+            f"{p}: phi {s['mean']:.1f} s  CI [{s['ci95'][0]:.1f}, {s['ci95'][1]:.1f}]  "
+            f"share {s['share_of_gain']:.0%}  ({summary['scope']} tools)"
+        )
+    return 0
+
+
+def cmd_final(args: argparse.Namespace) -> int:
+    from rulfuse.final import final_scores, write_final
+    from rulfuse.study import Study
+
+    study = Study.load(args.study)
+    result = final_scores(study, args.arm, args.runs_root)
+    path = write_final(result, study.run_dir(args.runs_root) / "final")
+    print(f"wrote {path}")
+    return 0 if all(r.get("done") for r in result["rows"]) else 1
+
+
 def cmd_sanity(args: argparse.Namespace) -> int:
     from rulfuse.config import FitConfig
     from rulfuse.features.cache import ImageFeatures, SignalFeatures, find_features
@@ -623,6 +657,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--runs-root", type=Path, default=None)
     p.set_defaults(func=cmd_freeze)
+
+    p = sub.add_parser("shapley", help="RUL-Fuse: retraining Shapley values (validation tools)")
+    p.add_argument("--study", default="shapley")
+    p.add_argument(
+        "--after-freeze",
+        action="store_true",
+        help="score the test tools instead (needs configs/final.json and the freeze date, D15)",
+    )
+    p.add_argument("--runs-root", type=Path, default=None)
+    p.set_defaults(func=cmd_shapley)
+
+    p = sub.add_parser("final", help="RUL-Fuse: test-tool scores of the frozen design (D15)")
+    p.add_argument("--study", default="gate3", help="study holding the frozen design's fits")
+    p.add_argument("--arm", default="design")
+    p.add_argument("--runs-root", type=Path, default=None)
+    p.set_defaults(func=cmd_final)
 
     p = sub.add_parser("sanity", help="RUL-Fuse: the seven Stage-4 sanity checks")
     p.add_argument("--study", default="pilot", help="study whose store, caches and base to use")

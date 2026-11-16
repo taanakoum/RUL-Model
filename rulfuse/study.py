@@ -766,7 +766,14 @@ def aggregate(study: Study, runs: Path | None = None, store: SegmentStore | None
     decision = decide(study, rows, lambda a: study.config(a, runs))
     versions = sorted({v for r in rows if r.get("done") for v in r["code_versions"].split(",")})
     decision["code_versions"] = [int(v) for v in versions]
-    decision["mixed_code_versions"] = len(versions) > 1
+    by_arm: dict[str, set] = {}
+    for r in rows:
+        if r.get("done"):
+            by_arm.setdefault(r["arm"], set()).update(r["code_versions"].split(","))
+    # arms of different families legitimately differ (F1 is version 1, F0 version 3); what
+    # makes a comparison unlike is one arm made by two code versions
+    decision["code_versions_by_arm"] = {a: sorted(map(int, v)) for a, v in by_arm.items()}
+    decision["mixed_code_versions"] = any(len(v) > 1 for v in by_arm.values())
     # what later studies inherit: earlier adoptions plus this study's
     decision["adopted"] = {**study.inherited(runs), **decision.get("new_adoptions", {})}
     decision["study"] = study.name
@@ -787,8 +794,8 @@ def render_report(study: Study, rows: list[dict], decision: dict) -> str:
     ]
     if decision.get("mixed_code_versions"):
         lines += [
-            f"**Warning: fits of code versions {decision['code_versions']} are mixed in this "
-            "study** (see the code_versions column of summary.csv); their comparison is not "
+            f"**Warning: fits of different code versions are mixed within an arm "
+            f"({decision['code_versions_by_arm']})** (see summary.csv); their comparison is not "
             "like for like.",
             "",
         ]
