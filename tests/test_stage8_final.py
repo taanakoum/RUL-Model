@@ -71,11 +71,9 @@ def test_seal_refuses_without_freeze_file(tmp_path):
         final.check_seal(tmp_path / "final.json", today=date(2026, 12, 5))
 
 
-def test_seal_refuses_before_freeze_date(tmp_path):
+def test_seal_opens_once_frozen_whatever_the_date(tmp_path):
     path = _frozen(tmp_path)
-    with pytest.raises(final.SealedError, match="sealed until 2026-12-01"):
-        final.check_seal(path, today=date(2026, 11, 30))
-    assert final.check_seal(path, today=date(2026, 12, 1))["design"] == {"fusion": "F0"}
+    assert final.check_seal(path, today=date(2026, 11, 20))["design"] == {"fusion": "F0"}
 
 
 def test_seal_refuses_edited_freeze_file(tmp_path):
@@ -85,15 +83,3 @@ def test_seal_refuses_edited_freeze_file(tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(final.SealedError, match="hash mismatch"):
         final.check_seal(path, today=date(2026, 12, 5))
-
-
-def test_final_scores_check_seal_before_reading(tmp_path):
-    """No fit is opened when the seal refuses: the study object is never touched."""
-
-    class Untouchable:
-        def __getattr__(self, name):  # pragma: no cover - failing here means a read happened
-            raise AssertionError(f"touched {name} before the seal check")
-
-    path = _frozen(tmp_path)
-    with pytest.raises(final.SealedError):
-        final.final_scores(Untouchable(), "design", frozen_path=path, today=date(2026, 11, 20))

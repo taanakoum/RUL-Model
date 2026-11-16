@@ -3,7 +3,6 @@
 This is the only module that reads prediction rows with ``role == "test"``. Every entry point
 calls :func:`check_seal` first, which refuses unless
 
-* today is on or after the freeze date, and
 * ``configs/final.json`` exists and its hash is intact, and
 * (for a study) the study's design equals the frozen one.
 
@@ -23,7 +22,7 @@ import numpy as np
 from rulfuse import paths
 from rulfuse.core.store import stable_hash
 from rulfuse.gate3 import fold_calibration, stack_seeds
-from rulfuse.study import FREEZE_DATE, Study, fit_dir, open_store, study_folds
+from rulfuse.study import Study, fit_dir, open_store, study_folds
 
 
 class SealedError(RuntimeError):
@@ -43,12 +42,10 @@ def load_frozen(path: Path | None = None) -> dict:
 
 def check_seal(frozen_path: Path | None = None, today: date | None = None) -> dict:
     """Return the frozen design, or refuse (D15)."""
-    today = today or date.today()
-    frozen = load_frozen(frozen_path)
-    opens = date.fromisoformat(frozen.get("freeze_date") or FREEZE_DATE)
-    if today < opens:
-        raise SealedError(f"test scores are sealed until {opens} (D15); today is {today}")
-    return frozen
+    # The freeze date no longer gates reading (user decision, 2026-11-16): once the design is
+    # frozen in configs/final.json the test tools can be scored. ``today`` is kept for callers.
+    del today
+    return load_frozen(frozen_path)
 
 
 def check_design(study: Study, arm: str, frozen: dict, runs: Path | None) -> None:
